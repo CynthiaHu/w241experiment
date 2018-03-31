@@ -1,0 +1,36 @@
+---
+title: "Going Green - With Envy or Education?"
+author: "Ram Balasubramanian, Tarun Chopra, Cynthia Hu, YangYang Qian"
+date: "March 25, 2018"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Executive Summary (?)
+
+## Research Question (Tarun)
+	• Statement of the research question; why this is interesting to someone who is predisposed to be interested; what other people know about this; what (if any) obsrevational work has to say about this question
+
+## Experiment Design (Ram and Cynthia)
+	• Research Design (using ROXO grammar)
+	• Randomization engineering
+	• Experimental materials (e.g. treatment materials)
+	• Measurement of variables
+	• Modeling choices
+	• Assumption check
+	• Power calculation (Yangyang)
+
+## Results (Yangyang)
+	• Data and assumption check?
+	• Regression 
+	• Hypothesis and relationship
+	• Figures and tables
+	• …..
+
+## Challenge and Limitation
+	• what were some limitations of your experiment? what did you learn? what might you have done differently given infinite time/resources?
+
