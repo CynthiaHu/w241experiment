@@ -17,6 +17,17 @@ Treat:      Y/N indicator for whether the house was "treated" or not.
 
 Each row represents a house, and each house has a before-treatment and after-treatment observation. Note that while we observed Post for nearly all units, we are not using records where Pre=Y in our ITT effect, so that we can see if we have an effect at all.
 
+
+We also calculate the following additional variables from the data
+S:              1 if Pre==Y, 0 otherwise, for easy filtering of houses that were in our experiment
+D:              1 if house was assigned to treatment , 0 otherwise
+pre.bin:        1 if Pre==Y, 0 otherwise
+post.bin:       1 if Post==Y, 0 if Post==N, NA otherwise
+wed             1 if PickupDOW==WED, 0 otherwise
+street.score:   Street score, calculated as the ratio of number of Pre==Y, to number of houses on the street, for each street
+
+
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
 
@@ -40,18 +51,20 @@ dtA <- dt[
     ,.(
         Number=factor(Number)
         ,Street=factor(Street)
+        ,Zip=factor(Zip)
+        ,Route
         ,PickupDOW
         ,Pre
-        ,pre.bin=factor(ifelse(Pre=="Y",1,0))
-        ,S=factor(ifelse(Pre=="N",1,0)) # 1 if part of experiment, 0 if not
         ,Treat
-        ,D=factor(ifelse(Treat=="Y",1,0))
         ,Post
-        ,post.bin=factor(ifelse(is.na(Post),NA,ifelse(Post=="Y",1,0)))
+        ,S=factor(ifelse(Pre=="N",1,0))
+        ,D=ifelse(Treat=="Y",1,0)
+        ,pre.bin=ifelse(Pre=="Y",1,0)
+        ,post.bin=ifelse(Post=="Y",1,ifelse(Post=="N",0,NA))
+        ,wed=ifelse(PickupDOW=="WED",1,0)
       )
     ,
 ] 
-# ignoring Route and Zip because those values do not change
 ```
 
 
@@ -59,28 +72,21 @@ dtA <- dt[
 ```{r}
 # calculates the street-score covariate
 # we might expect that a person on a street where lots of households recycle, might be more inclined to recycle
-# street score is calculated as the ratio of: number of preBin==Y, to number of houses on the street, for each street
+# street score is calculated as the ratio of: number of Pre==Y, to number of houses on the street, for each street
 
 # calculates the street score data table
 s.scr <- merge( 
-    x=dtA[D==1,.(count.Y=.N),by="Street"]
-    ,y=dtA[,.(count=.N),by="Street"]
+    x=dtA[Pre=="Y",.(n.pre.Y=.N),by="Street"]
+    ,y=dtA[,.(n.houses=.N),by="Street"]
     ,by.x="Street"
     ,by.y="Street"
     ,all.y=TRUE
 )[
     ,.(
         Street
-        ,count.Y=ifelse(is.na(count.Y),0,count.Y)
-        ,count
-        )
-    ,
-][
-    ,.(
-        Street
         #,count.Y
         #,count
-        ,street.score=count.Y/count
+        ,street.score=n.pre.Y/n.houses
         )
     ,
 ]
@@ -102,13 +108,15 @@ dtA <- merge( x=dtA, y=s.scr, by.x="Street", by.y="Street" )
 
 ```{r}
 # summary of variables
-summary(dtA)
+#summary(dtA)
+summary(dtA[,.(Route,PickupDOW,Pre,Treat,Post,S,street.score),])
 str(dtA)
+
 
 print("number of total observations in raw data:")
 (nrow(dt))
 print("number of units used in experiment:" )
-(nrow(dtA[S==1,,]))
+(nrow(dtA[S==1]))
 ```
 
 
@@ -155,6 +163,11 @@ ggplot(data=dtA[S==0,.N,by=.(Street)], mapping=aes(x=N)) +
 
 
 
+# Route
+#TBD
+
+
+
 
 # PickupDOW
 ggplot(data=dtA, mapping=aes(x=PickupDOW)) +
@@ -195,26 +208,44 @@ ggplot(data=dtA[S==1], mapping=aes(x="",fill=Post)) +
 ggplot(data=dtA[,.(street.score),], mapping=aes(x=street.score)) +
     geom_histogram(binwidth=.1) +
     scale_x_continuous(breaks = seq(0, 1, .1)) +
-    ggtitle("Distribution of street.scores") +
+    ggtitle("Distribution of street.scores", subtitle=paste("median of street.scores = ", dtA[,mean(street.score),])) +
     xlab("street score") +
-    ylab("Number")
-#dtA[street.score>=0.8,.(unique(Street)),] #finds the outlier
-
+    ylab("Number") + 
+    geom_vline(aes(xintercept = median(street.score)),col='black',size=2)
 # street score is a ratio houses with bins to all houses, per street. Ranges from 0 to 1
-# in our population, not just the houses experiment, we see a bimodal distribution of street scores: most streets have quite low ratio of pre / total < 0.1, while many other streets have somewhat 0.2 to 0.5 ratio. We do have an outlier street with very high ratio of 0.8 "Stonebridge View Drive"
+# we see that our houses on average tend to be on streets that are rather favorable to recycling (median ratio is 0.7)
+```
+
+```{r}
+# using regression to check for covariate balance
+# TBD  add regression analysis of D on rest of covariates
+
+colnames(dtA)
+str(dtA)
+
+# m.cbc <- lm(Treat ~ Street + PickupDOW + street.score, data=dtA[S==1])
+# m.cbc <- lm(D ~ Street + PickupDOW, data=dtA[S==1])
+# 
+# m.cbc <- lm(D ~ Street + PickupDOW + pre.bin + street.score, data=dtA[S==1])
+# m.cbc <- lm(D ~ PickupDOW + pre.bin + street.score, data=dtA[S==1])
+# 
+# 
+# m.cbc <- lm(post.bin ~ D + Street, data=dtA[S==1])
+# 
+# summary(m.cbc)
+
 ```
 
 
 ```{r}
-# some covariate analysis to check for balance between control and treatment groups
-# TBD  add regression analysis of D on rest of covariates
+# plots to show covariate balance between control and treatment groups
 
 library(ggplot2)
 
 #install.packages("GGally")
 library(GGally)
 
-#colnames(dtA)
+
 #plotmatrix(dtA[,.(Number,Street,PickupDOW),], colour="gray20")
 
 ggpairs(data=dtA[S==1,.(Treat,street.score,PickupDOW),]) +
@@ -239,12 +270,14 @@ ggplot(data=dtA[S==1], mapping=aes(x=Treat,y=street.score)) +
 
 
 # PickupDOW vs Treat
-ggplot(data=dtA[S==1], mapping=aes(x=Treat,y=PickupDOW)) +
-    geom_bar() 
+ggplot(data=dtA[S==1], mapping=aes(x=PickupDOW)) +
+    geom_bar() +
+    facet_grid(Treat ~ .)
 
 
-ggplot(data=dtA, mapping=aes(x=Pre,y=street.score)) +
-    geom_boxplot() 
+
+#ggplot(data=dtA, mapping=aes(x=Pre,y=street.score)) +
+    #geom_boxplot() 
     #facet_grid(Pre ~ .) +
     #ggtitle(label="Count of Houses per Post-treatment-bin-status") +
     #xlab("Post-treatment-bin-status") +
@@ -267,50 +300,50 @@ library(ggplot2)
 library(reshape2)
 
 
-# shows number of assignments, for the units in our experiment, to check if we have a roughly even split
-dtA[S==1,.N,by="D"]
-
-plt <- ggplot(data=dtA[S==1], mapping=aes(x=D))
-viz <- plt + 
-    geom_bar() + 
-    scale_x_continuous(breaks=c(0,1)) + 
-    ggtitle("Number of Assignments to Treatment and Control")
-viz
-
-
-
-# shows number of assignments by street, for the units in our experiment
-dcast(data=dtA[S==1,.N,by=c("D","Street")], Street ~ D, value.var="N")
-
-plt <- ggplot(data=dtA[S==1], mapping=aes(x=D,y=Street,fill=count))
-viz <- plt + 
-    geom_tile() + 
-    scale_x_continuous(breaks=c(0,1)) + 
-    ggtitle("Number of Assignments, by Street")
-viz
-
-
-
-# shows number of assignments by date, for units in our experiment
-dcast(data=dtA[S==1,.N,by=c("D","Date")], Date ~ D, value.var="N")
-
-plt <- ggplot(data=dtA[S==1], mapping=aes(x=D,y=Date,fill=count))
-viz <- plt + 
-    geom_tile() + 
-    scale_x_continuous(breaks=c(0,1)) + 
-    ggtitle("Number of Assignments, by Date")
-viz
-
-
-
-# shows number of assignments by street score, for units in our experiment
-dcast(data=dtA[S==1,.N,by=c("D","street.score")], street.score ~ D, value.var="N")
-
-plt <- ggplot(data=dtA[S==1,.N,by=c("D","street.score")], mapping=aes(x=street.score,y=N,color=factor(D)))
-viz <- plt + 
-    geom_point() + 
-    ggtitle("Number of Assignments, by street score")
-viz
+# # shows number of assignments, for the units in our experiment, to check if we have a roughly even split
+# dtA[S==1,.N,by="D"]
+# 
+# plt <- ggplot(data=dtA[S==1], mapping=aes(x=D))
+# viz <- plt + 
+#     geom_bar() + 
+#     scale_x_continuous(breaks=c(0,1)) + 
+#     ggtitle("Number of Assignments to Treatment and Control")
+# viz
+# 
+# 
+# 
+# # shows number of assignments by street, for the units in our experiment
+# dcast(data=dtA[S==1,.N,by=c("D","Street")], Street ~ D, value.var="N")
+# 
+# plt <- ggplot(data=dtA[S==1], mapping=aes(x=D,y=Street,fill=count))
+# viz <- plt + 
+#     geom_tile() + 
+#     scale_x_continuous(breaks=c(0,1)) + 
+#     ggtitle("Number of Assignments, by Street")
+# viz
+# 
+# 
+# 
+# # shows number of assignments by date, for units in our experiment
+# dcast(data=dtA[S==1,.N,by=c("D","Date")], Date ~ D, value.var="N")
+# 
+# plt <- ggplot(data=dtA[S==1], mapping=aes(x=D,y=Date,fill=count))
+# viz <- plt + 
+#     geom_tile() + 
+#     scale_x_continuous(breaks=c(0,1)) + 
+#     ggtitle("Number of Assignments, by Date")
+# viz
+# 
+# 
+# 
+# # shows number of assignments by street score, for units in our experiment
+# dcast(data=dtA[S==1,.N,by=c("D","street.score")], street.score ~ D, value.var="N")
+# 
+# plt <- ggplot(data=dtA[S==1,.N,by=c("D","street.score")], mapping=aes(x=street.score,y=N,color=factor(D)))
+# viz <- plt + 
+#     geom_point() + 
+#     ggtitle("Number of Assignments, by street score")
+# viz
 
 
 
@@ -330,16 +363,183 @@ library(ggplot2)
 library(reshape2)
 
 # displays distribution of assignment and post-treatment bin count, for the units in our experiment
-dcast(data=dtA[S==1,.N,by=c("D","post.bin")], post.bin ~ D, value.var="N")
+dcast(data=dtA[S==1,.N,by=c("Treat","Post")], Post ~ Treat, value.var="N")
 
-plt <- ggplot(data=dtA[S==1], mapping=aes(x=D,y=post.bin,fill=count))
-viz <- plt + 
-    geom_tile() + 
-    scale_x_continuous(breaks=c(0,1)) + 
-    scale_y_continuous(breaks=c(0,1)) + 
-    ggtitle("Number of Assignments, by post-treatment bin count")
-viz
+# ggplot(data=dtA[S==1], mapping=aes(x=Treat,y=Post,fill=count))
+#     geom_tile() + 
+#     scale_x_continuous(breaks=c(0,1)) + 
+#     scale_y_continuous(breaks=c(0,1)) + 
+#     ggtitle("Number of Assignments, by post-treatment bin count")
 ```
+
+
+```{r}
+# calculates a point estimate for ATE (ITT effect), manually for sanity check
+# note, when calculating ATE, we dropped the Post==NAs records, which we can attribute to measurement errors
+
+# potential outcome to control is calculated as proportion of homes that have bins when assigned to control
+po.control <- ( 
+        dtA[S==1 & !is.na(Post) & Treat=="N" & Post=="Y", .N, ] - 
+        dtA[S==1 & !is.na(Post) & Treat=="N" & Pre=="Y", .N, ] 
+        ) / dtA[S==1 & !is.na(Post) & Treat=="N", .N, ]
+print("potential outcome to control is:")
+(po.control)
+
+# potential outcome to treament is calculated as the proportion of homes that have bins when assigned to treatment
+po.treatment <- (
+        dtA[S==1 & !is.na(Post) & Treat=="Y" & Post=="Y", .N, ] - 
+        dtA[S==1 & !is.na(Post) & Treat=="Y" & Pre=="Y", .N, ]
+        ) / dtA[S==1 & !is.na(Post) & Treat=="Y", .N, ]
+print("potential outcome to treatment is:")
+(po.treatment)
+
+# point estimate for ate is calculate as potential outcome to treatment - potential outcome to control
+# note, we can only calcuate the intent to treamt effect, because we have no data on application rate
+ate <- po.treatment - po.control
+
+print("point estimate for ITT effect is:")
+(ate)
+```
+
+
+
+
+```{r}
+# calculates the ITT effect, using regression
+#m1 <- dtA[ , lm(hasBin ~ D) , ]  #this format that Alex likes doesn't quite work with the clustered se code later, so using a simpler one
+
+# model 1 has no control variables
+# m1 <- lm(Post ~ Treat, data=dtA[S==1])
+# (m1)
+
+m1 <- lm(post.bin ~ D, data=dtA[S==1 & !is.na(Post)])
+(m1)
+plot(m1)
+
+# model 2 uses the street (and TBD neighor) scores, as control variables
+# m2 <- lm(post.bin ~ Treat + street.score + PickupDOW, data=dtA[S==1 & !is.na(Post)])
+# (m2)
+# plot(m2)
+
+
+# model 3 uses the street (and TBD neighor) scores, as control variables
+m3 <- lm(post.bin ~ D + street.score + wed, data=dtA[S==1 & !is.na(Post)])
+(m3)
+plot(m3)
+
+```
+
+
+```{r}
+# calculates the robust standard error
+# see week05clusterAndRobust.Rmd for details
+
+# we calculate robust standard errors using the `sandwich` package, and via the `vcovHC` function call, which is the **H**eteroskedastic **C**onsistent **V**ariance **Co****V**ariance estimator.
+
+#install.packages("sandwich")
+library(sandwich)
+
+#install.packages("lmtest")
+library(lmtest)
+
+m1$vcovHC <- vcovHC(m1)
+coeftest(m1)
+
+# m2$vcovHC <- vcovHC(m2)
+# coeftest(m2)
+
+m3$vcovHC <- vcovHC(m3)
+coeftest(m3)
+```
+
+```{r, results = "asis"}
+# displays the robust standard error we just calculated using a stargazer table
+
+#install.packages("stargazer")
+library(stargazer)
+stargazer(
+    m1
+    #,m2
+    ,m3
+    ,se=list(
+        sqrt(diag(m1$vcovHC))
+        #,sqrt(diag(m2$vcovHC))
+        ,sqrt(diag(m3$vcovHC))
+        )
+    ,header=F
+    , type="text"  # type="latex"?
+) 
+```
+
+
+```{r}
+# calculates the clustered standard error
+# is better fit to reality in our case, since we have a clustered design
+# TBD think about randomization inference, see Ram's code and GG's
+
+#install.packages("multiwayvcov")
+library(multiwayvcov)
+
+# note, we assume streets is our cluster, so we calculate the clustered var-cov matrix using Street variable
+m1$cluster.vcov <- cluster.vcov(m1, ~ Street)
+coeftest(m1, m1$cluster.vcov)
+
+# m2$cluster.vcov <- cluster.vcov(m2, ~ Street)
+# coeftest(m2, m2$cluster.vcov)
+
+m3$cluster.vcov <- cluster.vcov(m3, ~ Street)
+coeftest(m3, m3$cluster.vcov)
+```
+
+
+```{r, results = "asis"}
+# displays the clustered standard error we just calculated using a stargazer table
+
+#install.packages("stargazer")
+library(stargazer)
+stargazer(
+    m1
+    #,m2
+    ,m3
+    ,se=list(
+        sqrt(diag(m1$cluster.vcov))
+        #,sqrt(diag(m2$cluster.vcov))
+        ,sqrt(diag(m3$cluster.vcov))
+        )
+    ,header=F
+    , type="text"  # type="latex"?
+) 
+```
+
+
+```{r}
+# stores the standard errors in some easy to access variables
+# maybe not necessary, since we have the regression tables
+# m1$robust.se <-  sqrt(diag(m1$vcovHC))
+# m1$cluster.se <- sqrt(diag(m1$cluster.vcov))
+# 
+# m2$robust.se <-  sqrt(diag(m2$vcovHC))
+# m2$cluster.se <- sqrt(diag(m2$cluster.vcov))
+# 
+# print("model 1 robust standard errors, but without clustering:")
+# (m1$robust.se)
+# print("model 1 clustered standard errors:")
+# (m1$cluster.se)
+# 
+# print("model 2 robust standard errors, but without clustering:")
+# (m2$robust.se)
+# print("model 2 clustered standard errors:")
+# (m2$cluster.se)
+```
+
+```{r}
+# calculates the ci for the ITT effect
+coefci(m1)
+# coefci(m2)
+coefci(m3)
+
+```
+
 
 
 ```{r}
@@ -375,154 +575,16 @@ viz
 #       How strong must the evidence be for you to conclude that your experiment was successful?
 
 
-print("sample size overall")
-dtA[S==1,.N,]
-print("sample size in condition")
-dtA[S==1 & D==0,.N,]
-print("sample size in treatment")
-dtA[S==1 & D==1,.N,]
+# print("sample size overall")
+# dtA[S==1,.N,]
+# print("sample size in condition")
+# dtA[S==1 & D==0,.N,]
+# print("sample size in treatment")
+# dtA[S==1 & D==1,.N,]
 
 
 
 
 
 
-```
-
-
-
-```{r}
-# calculates a point estimate for ATE (ITT effect), manually for sanity check
-
-# potential outcome to control is calculated as proportion of homes that have bins when assigned to control
-po.control <- dtA[D==0 & post.bin==1, .N, ] / dtA[D==0, .N, ]
-print("potential outcome to control is:")
-(po.control)
-
-# potential outcome to treament is calculated as the proportion of homes that have bins when assigned to treatment
-po.treatment <- dtA[D==1 & post.bin==1, .N, ] / dtA[D==1, .N, ]
-print("potential outcome to treatment is:")
-(po.treatment)
-
-# point estimate for ate is calculate as potential outcome to treatment - potential outcome to control
-# note, we can only calcuate the intent to treamt effect, because we have no data on application rate
-ate <- po.treatment - po.control
-
-print("point estimate for ITT effect is:")
-(ate)
-```
-
-
-
-
-```{r}
-# calculates the ITT effect, using regression
-#m1 <- dtA[ , lm(hasBin ~ D) , ]  #this format that Alex likes doesn't quite work with the clustered se code later, so using a simpler one
-
-# model 1 has no control variables
-m1 <- lm(post.bin ~ D, data=dtA)
-(m1)
-
-# model 2 uses the street (and TBD neighor) scores, as control variables
-m2 <- lm(post.bin ~ D + street.score, data=dtA)
-(m2)
-```
-
-
-```{r}
-# calculates the robust standard error
-# see week05clusterAndRobust.Rmd for details
-
-# we calculate robust standard errors using the `sandwich` package, and via the `vcovHC` function call, which is the **H**eteroskedastic **C**onsistent **V**ariance **Co****V**ariance estimator.
-
-#install.packages("sandwich")
-library(sandwich)
-
-#install.packages("lmtest")
-library(lmtest)
-
-m1$vcovHC <- vcovHC(m1)
-coeftest(m1)
-
-m2$vcovHC <- vcovHC(m2)
-coeftest(m2)
-```
-
-```{r, results = "asis"}
-# displays the robust standard error we just calculated using a stargazer table
-
-#install.packages("stargazer")
-library(stargazer)
-stargazer(
-    m1, m2
-    ,se=list(
-        sqrt(diag(m1$vcovHC)),
-        sqrt(diag(m2$vcovHC))
-        )
-    ,header=F
-    , type="text"  # type="latex"?
-) 
-```
-
-
-```{r}
-# calculates the clustered standard error
-# is better fit to reality in our case, since we have a clustered design
-
-#install.packages("multiwayvcov")
-library(multiwayvcov)
-
-# note, we assume streets is our cluster, so we calculate the clustered var-cov matrix using Street variable
-m1$cluster.vcov <- cluster.vcov(m1, ~ Street)
-coeftest(m1, m1$cluster.vcov)
-
-m2$cluster.vcov <- cluster.vcov(m2, ~ Street)
-coeftest(m2, m2$cluster.vcov)
-```
-
-
-```{r, results = "asis"}
-# displays the clustered standard error we just calculated using a stargazer table
-
-#install.packages("stargazer")
-library(stargazer)
-stargazer(
-    m1, m2
-    ,se=list(
-        sqrt(diag(m1$cluster.vcov)),
-        sqrt(diag(m2$cluster.vcov))
-        )
-    ,header=F
-    , type="text"  # type="latex"?
-) 
-```
-
-
-```{r}
-# stores the standard errors in some easy to access variables
-# maybe not necessary, since we have the regression tables
-m1$robust.se <-  sqrt(diag(m1$vcovHC))
-m1$cluster.se <- sqrt(diag(m1$cluster.vcov))
-
-m2$robust.se <-  sqrt(diag(m2$vcovHC))
-m2$cluster.se <- sqrt(diag(m2$cluster.vcov))
-
-print("model 1 robust standard errors, but without clustering:")
-(m1$robust.se)
-print("model 1 clustered standard errors:")
-(m1$cluster.se)
-
-print("model 2 robust standard errors, but without clustering:")
-(m2$robust.se)
-print("model 2 clustered standard errors:")
-(m2$cluster.se)
-```
-
-```{r}
-# calculates the ci for the ITT effect
-coefci(m1)
-coefci(m2)
-
-# calcualtes the ci manually, for practice
-# TBD
 ```

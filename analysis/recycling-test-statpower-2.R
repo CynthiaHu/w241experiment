@@ -1,5 +1,11 @@
+# this is just a test script for statistical power simulations. To be merged into main test script.
 # import our data from the experiment
+
 # alternative: could do this without the data, just back of napkin calculations
+
+getwd()
+setwd("C:/Users/yangyq/workspaces/ucbiyyq/w241experiment/analysis")
+getwd()
 
 # loads raw data
 dt <- data.table(read.csv("../data/Data - BOTH.csv", na.strings=c("")))
@@ -11,9 +17,12 @@ dtA <- dt[
         ,Street=factor(Street)
         ,PickupDOW
         ,Pre
-        ,S=factor(ifelse(Pre=="N",1,0)) # 1 if part of experiment, 0 if not
         ,Treat
         ,Post
+        ,S=factor(ifelse(Pre=="N",1,0))
+        ,D=ifelse(Treat=="Y",1,0)
+        ,pre.bin=ifelse(Pre=="Y",1,0)
+        ,post.bin=ifelse(Post=="Y",1,ifelse(Post=="N",0,NA))
     )
     ,
     ] 
@@ -110,17 +119,18 @@ power.function2 <- function(
 
 
 # calculate the ingredients needed for Alex's new power function
+# note, when calculating ATE, we dropped the Post==NAs records, which we can attribute to measurement errors
 
-n.bins.treat.post <- dtA[S==1 & Treat=="Y" & Post=="Y",.N] #33
-n.bins.treat.pre  <- dtA[S==1 & Treat=="Y" & Pre=="Y",.N] #0
-n.units.treat     <- dtA[S==1 & Treat=="Y", .N] #102
+n.bins.treat.post <- dtA[S==1 & !is.na(Post) & Treat=="Y" & Post=="Y",.N] #33
+n.bins.treat.pre  <- dtA[S==1 & !is.na(Post) & Treat=="Y" & Pre=="Y",.N] #0
+n.units.treat     <- dtA[S==1 & !is.na(Post) & Treat=="Y", .N] #102
 mu.treat          <- (n.bins.treat.post - n.bins.treat.pre) / n.units.treat #0.3235
 sd.treat          <- 1 # not used for rbinom distribution
 
-n.bins.control.post <- dtA[S==1 & Treat=="N" & Post=="Y",.N] #34
-n.bins.control.pre  <- dtA[S==1 & Treat=="N" & Pre=="Y",.N] #0
-n.units.control     <- dtA[S==1 & Treat=="N", .N] #84
-mu.control          <- (n.bins.control.post - n.bins.control.pre) / n.units.control #0.4048
+n.bins.control.post <- dtA[S==1 & !is.na(Post) & Treat=="N" & Post=="Y",.N] #34
+n.bins.control.pre  <- dtA[S==1 & !is.na(Post) & Treat=="N" & Pre=="Y",.N] #0
+n.units.control     <- dtA[S==1 & !is.na(Post) & Treat=="N", .N] #80
+mu.control          <- (n.bins.control.post - n.bins.control.pre) / n.units.control #0.425
 sd.control          <- 1 # not used for rbinom distribution
 
 
@@ -166,4 +176,21 @@ hist(p.values, main=paste("Power = ", mean(p.values < 0.05)))
 
 
 
+
+p.values <- replicate(10000,
+      power.function2(
+          sim.n.units.treat    = n.units.treat
+          ,sim.n.units.control = n.units.control
+          ,sim.mu.treat            = mu.control + .2
+          ,sim.mu.control          = mu.control
+      )
+)
+hist(p.values, main=paste("Power = ", mean(p.values < 0.05)))
+# if we had a treatment mean that is 20% larger than the control, then we can reject H0 correctly 77% of the time
+
+
+
+# conclusion: talk about both
+# e.g. holding the sample sizes the same, but playing with the treatment effect. Do a chart
+# holding the treatment effect, but playing with the sample size
 
