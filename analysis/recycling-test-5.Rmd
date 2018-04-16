@@ -841,7 +841,8 @@ stargazer(
         ,sqrt(diag(m2b$cluster.vcov))
         )
     ,header=F
-    , type="text"  # type="latex"?
+    , type="text"
+    # ,type="latex"
 ) 
 ```
 
@@ -869,8 +870,11 @@ stargazer(
 ```{r}
 # calculates the ci for the ITT effect
 coefci(m1)
-# coefci(m2)
-coefci(m3)
+coefci(m1a)
+coefci(m1b)
+coefci(m2)
+coefci(m2a)
+coefci(m2b)
 
 ```
 
