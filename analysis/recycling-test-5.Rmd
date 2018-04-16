@@ -9,22 +9,28 @@ The following columns are in the raw data
 Route:      route id
 Number:     house number
 Street:     streetname
+city:       city
+state:      state
 zip:        zipcode
 pickup dow: either THU or WED to indicate which day of week
 Pre:        Y/N indicator for whether we saw these folks put out a bin during the "before treatment" observation
 Post:       Y/N indicator for whether we saw these folks put out a bin during the "after treatment" observation
 Treat:      Y/N indicator for whether the house was "treated" or not.
 
+
 Each row represents a house, and each house has a before-treatment and after-treatment observation. Note that while we observed Post for nearly all units, we are not using records where Pre=Y in our ITT effect, so that we can see if we have an effect at all.
 
 
 We also calculate the following additional variables from the data
-S:              1 if Pre==Y, 0 otherwise, for easy filtering of houses that were in our experiment
-D:              1 if house was assigned to treatment , 0 otherwise
-pre.bin:        1 if Pre==Y, 0 otherwise
-post.bin:       1 if Post==Y, 0 if Post==N, NA otherwise
-wed             1 if PickupDOW==WED, 0 otherwise
-street.score:   Street score, calculated as the ratio of number of Pre==Y, to number of houses on the street, for each street
+S:                  1 if Pre==Y, 0 otherwise, for easy filtering of houses that were in our experiment
+D:                  1 if house was assigned to treatment , 0 otherwise
+pre.bin:            1 if Pre==Y, 0 otherwise
+post.bin:           1 if Post==Y, 0 if Post==N, NA otherwise, i.e. drops the NA records
+post.bin.a:         1 if Post==Y, 0 if Post==N, 0 otherwise, i.e. assumes NA records would have measured 0
+post.bin.b:         1 if Post==Y, 0 if Post==N, 1 otherwise, i.e. assumes NA records would have measured 1
+wed                 1 if PickupDOW==WED, 0 otherwise
+street.score:       Street score, calculated as the ratio of number of Pre==Y, to number of houses on the street, for each street
+neighbors.score:    Neighbors' score, calcuated as the ratio of number of Pre==Y, to the number of neighbors, for each house (neighbor defined as 0 > distance < 60 meters)
 
 
 
@@ -36,13 +42,11 @@ setwd("C:/Users/yangyq/workspaces/ucbiyyq/w241experiment/analysis")
 getwd()
 ```
 
-```{r}
+
+```{r load_raw}
 #install.packages("data.table")
 library(data.table)
-```
 
-
-```{r}
 # loads raw data
 dt <- data.table(read.csv("../data/Data - BOTH.csv", na.strings=c("")))
 
@@ -51,6 +55,8 @@ dtA <- dt[
     ,.(
         Number=factor(Number)
         ,Street=factor(Street)
+        ,City
+        ,State
         ,Zip=factor(Zip)
         ,Route
         ,PickupDOW
@@ -61,15 +67,17 @@ dtA <- dt[
         ,D=ifelse(Treat=="Y",1,0)
         ,pre.bin=ifelse(Pre=="Y",1,0)
         ,post.bin=ifelse(Post=="Y",1,ifelse(Post=="N",0,NA))
+        ,post.bin.a=ifelse(is.na(Post),0,ifelse(Post=="Y",1,0))
+        ,post.bin.b=ifelse(is.na(Post),1,ifelse(Post=="Y",1,0))
         ,wed=ifelse(PickupDOW=="WED",1,0)
-      )
+    )
     ,
-] 
+]
 ```
 
 
 
-```{r}
+```{r calc_street_score}
 # calculates the street-score covariate
 # we might expect that a person on a street where lots of households recycle, might be more inclined to recycle
 # street score is calculated as the ratio of: number of Pre==Y, to number of houses on the street, for each street
@@ -84,33 +92,215 @@ s.scr <- merge(
 )[
     ,.(
         Street
-        #,count.Y
-        #,count
+        ,n.pre.Y=ifelse(is.na(n.pre.Y),0,n.pre.Y)
+        ,n.houses
+    )
+    ,
+][
+    ,.(
+        Street
+        #,n.pre.Y
+        #,n.houses
         ,street.score=n.pre.Y/n.houses
-        )
+    )
     ,
 ]
 
 
 # joins the street score data table back into the main data table
-dtA <- merge( x=dtA, y=s.scr, by.x="Street", by.y="Street" )
+dtA <- merge( x=dtA, y=s.scr, by.x="Street", by.y="Street", all.x=TRUE )
 
 ```
 
 
-```{r}
+```{r calc_neighbors_score}
 # calculates the neighbor-score covariate
 # we might expect that a person whose nearby neighbors recycle, might be more inclined to recycle
-# TBD
+
+# reads gps from disk, prefetched by the test-gps script
+gpsr <- data.table(read.csv("../data/Data-gps.csv", na.strings=c("")))[
+    ,.(
+        Number=factor(Number)
+        ,Street
+        ,City
+        ,State
+        ,Zip=factor(Zip)
+        ,lat
+        ,lng)
+    ,
+]
+
+
+# calculates the cross-join of each house to others
+gpsj <- gpsr[,.(Number, Street, Zip, lat, lng, j=1),] #adds a dummy column "j" to manipulate the cross join
+gpsx <- merge(gpsj, gpsj, by='j', all.x=TRUE, all.y=TRUE, allow.cartesian=TRUE)
+
+
+#calculates the distance between gps points
+# R function that computes the "great circle" distance between two gps points. Intended for use with data.table
+# https://stackoverflow.com/questions/36817423/how-to-efficiently-calculate-distance-between-pair-of-coordinates-using-data-tab
+# r = radius of earth in meters
+# returns distance between the two gps locations, in meters
+dt.haversine <- function(lat_from, lon_from, lat_to, lon_to, r = 6378137){
+    radians <- pi/180
+    lat_to <- lat_to * radians
+    lat_from <- lat_from * radians
+    lon_to <- lon_to * radians
+    lon_from <- lon_from * radians
+    dLat <- (lat_to - lat_from)
+    dLon <- (lon_to - lon_from)
+    a <- (sin(dLat/2)^2) + (cos(lat_from) * cos(lat_to)) * (sin(dLon/2)^2)
+    return(2 * atan2(sqrt(a), sqrt(1 - a)) * r)
+}
+
+
+# calculates all the distances between all houses
+gpsx <- gpsx[ 
+    , .(
+            Number.x=factor(Number.x)
+            ,Street.x=factor(Street.x)
+            ,Zip.x=factor(Zip.x)
+            ,lat.x
+            ,lng.x
+            ,Number.y=factor(Number.y)
+            ,Street.y=factor(Street.y)
+            ,Zip.y=factor(Zip.y)
+            ,lat.y
+            ,lng.y
+            ,dist=dt.haversine(lat.x, lng.x, lat.y, lng.y)
+            ,num.diff = as.numeric(levels(Number.x))[Number.x] - as.numeric(levels(Number.y))[Number.y]
+        )
+    , 
+]
+
+
+# left joins the dtA data to the gpsx data, specifically on y-columns, so that we can calculate the neighbor score of the x-columns
+setkey(gpsx,Number.y,Street.y)
+setkey(dtA,Number,Street)
+gpsx <- merge(
+    x=gpsx
+    ,y=dtA
+    ,by.x=c("Number.y","Street.y")
+    ,by.y=c("Number","Street")
+    ,all.x=TRUE
+    ,allow.cartesian=TRUE 
+)[
+    ,.(
+        Number.x
+        ,Street.x
+        ,Zip.x
+        ,lat.x
+        ,lng.x
+        ,Number.y
+        ,Street.y
+        ,Zip.y
+        ,lat.y
+        ,lng.y
+        ,Pre.y=Pre
+        ,pre.bin.y=pre.bin
+        ,PickupDOW.y=PickupDOW
+        ,wed.y=wed
+        ,dist
+        ,num.diff
+    )
+]
+
+
+# calcuates the neighbor score, as ratio of Pre==Y / Number of neighbors, per house
+# neighbors defined as houses within 60 meters, but the house itself
+# see the test-gps script for test examples to determine radius
+# note, due to some addresses that can't be found, there will be some missing houses
+n.scr <- merge(
+    x=gpsx[dist>0 & dist<60 & Pre.y=="Y", .(n.pre.y=.N), by=c("Number.x","Street.x")]
+    ,y=gpsx[dist>0 & dist<60, .(n.neighbors=.N), by=c("Number.x","Street.x")]
+    ,by.x=c("Number.x","Street.x")
+    ,by.y=c("Number.x","Street.x")
+    ,all.y=TRUE
+)[
+    ,.(
+        Number=Number.x
+        ,Street=Street.x
+        ,n.pre.y=ifelse(is.na(n.pre.y),0,n.pre.y)
+        ,n.neighbors
+    )
+    ,
+][
+    ,.(
+        Number
+        ,Street
+        #,n.pre.y
+        #,n.neighbors
+        ,neighbors.score=n.pre.y/n.neighbors
+    )
+    ,
+]
+
+
+
+# joins the street score data table back into the main data table
+dtA <- merge(
+    x=dtA
+    ,y=n.scr
+    ,by.x=c("Number","Street")
+    ,by.y=c("Number","Street")
+    ,all.x=TRUE 
+)
+
+
+
+# joins the gps data back into main data table for future visualizations
+dtA <- merge(
+    x=dtA
+    ,y=gpsr[,.(Number,Street,lat,lng)]
+    ,by.x=c("Number","Street")
+    ,by.y=c("Number","Street")
+    ,all.x=TRUE 
+)
+
+
+# selects just the columns we care about
+# replaces any neighbor score NA with 0
+dtA <- dtA[
+    ,.(
+        Number
+        ,Street
+        ,City
+        ,State
+        ,Zip
+        ,Route
+        ,PickupDOW
+        ,Pre
+        ,Treat
+        ,Post
+        ,S
+        ,D
+        ,pre.bin
+        ,post.bin
+        ,post.bin.a
+        ,post.bin.b
+        ,wed
+        ,street.score
+        ,neighbors.score=ifelse(is.na(neighbors.score),0,neighbors.score)
+        ,lat
+        ,lng
+    )
+    ,
+]
 
 ```
 
 
 ```{r}
 # summary of variables
+summary(dtA[,.(Number,Street,City,State,Zip,Route,PickupDOW,Pre,Treat,Post),])
+str(dtA[,.(Number,Street,City,State,Zip,Route,PickupDOW,Pre,Treat,Post),])
+
+# summary of variables, the calculated values
+summary(dtA[,.(S,D,wed,street.score,neighbors.score,pre.bin,post.bin,post.bin.a,post.bin.b),])
+str(dtA[,.(S,D,wed,street.score,neighbors.score,pre.bin,post.bin,post.bin.a,post.bin.b),])
+
 #summary(dtA)
-summary(dtA[,.(Route,PickupDOW,Pre,Treat,Post,S,street.score),])
-str(dtA)
+#str(dtA)
 
 
 print("number of total observations in raw data:")
@@ -152,19 +342,65 @@ ggplot(data=dtA[S==1,.N,by=.(Street)], mapping=aes(x=N)) +
     ggtitle("Frequency of houses-per-Street S=1") +
     xlab("houses per Street") +
     ylab("Frequency")
-    
 
-ggplot(data=dtA[S==0,.N,by=.(Street)], mapping=aes(x=N)) +
-    geom_histogram(binwidth=10) + 
-    scale_x_continuous(breaks = seq(0, 100, 10)) +
-    ggtitle("Frequency of houses-per-Street S=0") +
-    xlab("houses per Street") +
-    ylab("Frequency")
+# ggplot(data=dtA[S==0,.N,by=.(Street)], mapping=aes(x=N)) +
+#     geom_histogram(binwidth=10) + 
+#     scale_x_continuous(breaks = seq(0, 100, 10)) +
+#     ggtitle("Frequency of houses-per-Street S=0") +
+#     xlab("houses per Street") +
+#     ylab("Frequency")
+
+
+
+
+
+# City
+ggplot(data=dtA, mapping=aes(x=City)) +
+    geom_bar() + 
+    ggtitle(label="Count of Houses per City") +
+    xlab("City") +
+    ylab("Count of houses")
+# we have about twice as many houses from Rockville, vs North Potomac, and just a few from Parkville
+# note, "city" in our county are not necessarily separate cities, but suburban muncipalities
+
+ggplot(data=dtA[S==1], mapping=aes(x=City)) +
+    geom_bar() + 
+    ggtitle(label="Count of Houses per City S=1") +
+    xlab("City") +
+    ylab("Count of houses")
+# same trend holds for our experimental units
+
+
+
+# State
+ggplot(data=dtA, mapping=aes(x=State)) +
+    geom_bar() + 
+    ggtitle(label="Count of Houses per State") +
+    xlab("State") +
+    ylab("Count of houses")
+# all of our houses are in Maryland
+
+
+
+# Zip
+ggplot(data=dtA, mapping=aes(x=Zip)) +
+    geom_bar() + 
+    ggtitle(label="Count of Houses per Zip") +
+    xlab("Zip") +
+    ylab("Count of houses")
+# all of our houses are in the same zip code
+
 
 
 
 # Route
-#TBD
+ggplot(data=dtA, mapping=aes(x=Route)) +
+    geom_bar() + 
+    ggtitle(label="Count of Houses per Route") +
+    xlab("Route") +
+    ylab("Count of houses")
+# we have roughly twice as many houses on route RE13W02, vs on RE13H02
+
 
 
 
@@ -176,6 +412,7 @@ ggplot(data=dtA, mapping=aes(x=PickupDOW)) +
     xlab("Pickup-DOW") +
     ylab("Count of houses")
 # roughly twice the number of houses get their recycling pickup on Wed than on Thurs
+
 
 
 
@@ -199,7 +436,7 @@ ggplot(data=dtA[S==1], mapping=aes(x="",fill=Post)) +
     xlab("Post-treatment-bin-status") +
     ylab("Count of houses")
 # of those in the experiment, only about 1/3 of houses put out a bin in post-treatment
-# We're missing 5 observations due to measurement error (attrition)
+# We're missing 5 observations due to measurement error
 # note, only those in the experiment (Pre=N) have a valid post-treatment
 
 
@@ -214,6 +451,20 @@ ggplot(data=dtA[,.(street.score),], mapping=aes(x=street.score)) +
     geom_vline(aes(xintercept = median(street.score)),col='black',size=2)
 # street score is a ratio houses with bins to all houses, per street. Ranges from 0 to 1
 # we see that our houses on average tend to be on streets that are rather favorable to recycling (median ratio is 0.7)
+
+
+
+
+# neighbors.score
+ggplot(data=dtA[,.(neighbors.score),], mapping=aes(x=neighbors.score)) +
+    geom_histogram(binwidth=.1) +
+    scale_x_continuous(breaks = seq(0, 1, .1)) +
+    ggtitle("Distribution of neighbors.score", subtitle=paste("median of neighbors.score = ", dtA[,mean(neighbors.score),])) +
+    xlab("Neighbors score") +
+    ylab("Number") + 
+    geom_vline(aes(xintercept = median(neighbors.score)),col='black',size=2)
+
+
 ```
 
 ```{r}
@@ -234,6 +485,10 @@ str(dtA)
 # 
 # summary(m.cbc)
 
+# check for balance using regression
+#dtA[,lm(Treat ~ Street + street.score + PickupDOW),]
+
+
 ```
 
 
@@ -248,40 +503,67 @@ library(GGally)
 
 #plotmatrix(dtA[,.(Number,Street,PickupDOW),], colour="gray20")
 
-ggpairs(data=dtA[S==1,.(Treat,street.score,PickupDOW),]) +
-    ggtitle(label="Count of Houses per Post-treatment-bin-status") +
-    xlab("Post-treatment-bin-status") +
-    ylab("Count of houses")
+# ggpairs(data=dtA[S==1,.(Treat,street.score,PickupDOW),]) +
+#     ggtitle(label="Count of Houses per Post-treatment-bin-status") +
+#     xlab("Post-treatment-bin-status") +
+#     ylab("Count of houses")
 
-# check for balance using regression
-dtA[,lm(Treat ~ Street + street.score + PickupDOW),]
+
+# gps locations of houses
+# TBD make interactive plot?
+# TBD remove the outliers
+ggplot(data=dtA[,.(Street,lat,lng)], mapping=aes(x=lng,y=lat)) +
+    geom_point(size=1) + 
+    ggtitle(label="Relative Locations of houses") +
+    xlab("Longitude") +
+    ylab("Latitude")
+
+# gps locations of houses on each street
+for (i in unique(dtA[,Street])) {
+    plt <- ggplot(data=dtA[Street==i,.(lat,lng,Treat,S)], mapping=aes(x=lng,y=lat,color=Treat,shape=S)) +
+        geom_point(size=5) + 
+        ggtitle(label=paste(i)) +
+        xlab("Longitude") +
+        ylab("Latitude")
+    print(plt)
+}
+
 
 
 
 # street.score vs Treat
 ggplot(data=dtA[S==1], mapping=aes(x=Treat,y=street.score)) +
-    geom_boxplot() 
+    geom_boxplot() +
     #facet_grid(Pre ~ .) +
-    #ggtitle(label="Count of Houses per Post-treatment-bin-status") +
-    #xlab("Post-treatment-bin-status") +
-    #ylab("Count of houses")
-# our randomizer did not balance between streets of similar scores
+    ggtitle(label="Boxplot Street Score vs Treat S=1") +
+    xlab("Treat") +
+    ylab("Street Score")
+
+
+
+# neighbors.score vs Treat
+ggplot(data=dtA[S==1], mapping=aes(x=Treat,y=neighbors.score)) +
+    geom_boxplot() +
+    ggtitle(label="Boxplot Neighbors Score vs Treat S=1") +
+    xlab("Treat") +
+    ylab("Neighbors Score")
 
 
 
 # PickupDOW vs Treat
-ggplot(data=dtA[S==1], mapping=aes(x=PickupDOW)) +
-    geom_bar() +
-    facet_grid(Treat ~ .)
+# ggplot(data=dtA[S==1,.(.N),by=c("Treat","PickupDOW")], mapping=aes(x=Treat,y=N)) +
+#     geom_bar() +
+#     facet_grid(PickupDOW ~ .) +
+#     ggtitle(label="Count of houses in PickupDOW vs Treat S=1") +
+#     xlab("PickupDOW") +
+#     ylab("Neighbors Score")
 
 
 
-#ggplot(data=dtA, mapping=aes(x=Pre,y=street.score)) +
-    #geom_boxplot() 
-    #facet_grid(Pre ~ .) +
-    #ggtitle(label="Count of Houses per Post-treatment-bin-status") +
-    #xlab("Post-treatment-bin-status") +
-    #ylab("Count of houses")
+# street.score vs neighbors.score
+ggplot(data=dtA[S==1,.(street.score,neighbors.score)], mapping=aes(x=street.score,y=neighbors.score,size=2))
+    geom_point() +
+    ggtitle("Number of Assignments, by street score")
 ```
 
 
@@ -408,24 +690,40 @@ print("point estimate for ITT effect is:")
 # calculates the ITT effect, using regression
 #m1 <- dtA[ , lm(hasBin ~ D) , ]  #this format that Alex likes doesn't quite work with the clustered se code later, so using a simpler one
 
-# model 1 has no control variables
-# m1 <- lm(Post ~ Treat, data=dtA[S==1])
-# (m1)
 
-m1 <- lm(post.bin ~ D, data=dtA[S==1 & !is.na(Post)])
+
+# model 1, has no control variables
+m1 <- lm(post.bin ~ D, data=dtA[S==1 & !is.na(post.bin)])
 (m1)
 plot(m1)
 
-# model 2 uses the street (and TBD neighor) scores, as control variables
-# m2 <- lm(post.bin ~ Treat + street.score + PickupDOW, data=dtA[S==1 & !is.na(Post)])
-# (m2)
-# plot(m2)
+# model 1a, assumes the NA houses would have NOT put out a bin, had we been able to measure them
+m1a <- lm(post.bin.a ~ D, data=dtA[S==1])
+(m1a)
+plot(m1a)
+
+# model 1b, assumes the NA houses woudl have put out a bin, had we been able to measure them
+m1b <- lm(post.bin.b ~ D, data=dtA[S==1])
+(m1b)
+plot(m1b)
 
 
-# model 3 uses the street (and TBD neighor) scores, as control variables
-m3 <- lm(post.bin ~ D + street.score + wed, data=dtA[S==1 & !is.na(Post)])
-(m3)
-plot(m3)
+
+# model 2 includes covariates like pickup DOW, street, and neighor scores, as control variables
+m2 <- lm(post.bin ~ D + street.score + neighbors.score + wed, data=dtA[S==1 & !is.na(post.bin)])
+(m2)
+plot(m2)
+
+# model 2a, assumes the NA houses would have NOT put out a bin, had we been able to measure them
+m2a <- lm(post.bin.a ~ D + street.score + neighbors.score + wed, data=dtA[S==1])
+(m2a)
+plot(m2a)
+
+# model 2b, assumes the NA houses would have put out a bin, had we been able to measure them
+m2b <- lm(post.bin.b ~ D + street.score + neighbors.score + wed, data=dtA[S==1])
+(m2b)
+plot(m2b)
+
 
 ```
 
@@ -445,11 +743,23 @@ library(lmtest)
 m1$vcovHC <- vcovHC(m1)
 coeftest(m1)
 
-# m2$vcovHC <- vcovHC(m2)
-# coeftest(m2)
+m1a$vcovHC <- vcovHC(m1a)
+coeftest(m1a)
 
-m3$vcovHC <- vcovHC(m3)
-coeftest(m3)
+m1b$vcovHC <- vcovHC(m1b)
+coeftest(m1b)
+
+
+
+m2a$vcovHC <- vcovHC(m2a)
+coeftest(m2a)
+
+m2b$vcovHC <- vcovHC(m2b)
+coeftest(m2b)
+
+m2b$vcovHC <- vcovHC(m2b)
+coeftest(m2b)
+
 ```
 
 ```{r, results = "asis"}
@@ -459,12 +769,18 @@ coeftest(m3)
 library(stargazer)
 stargazer(
     m1
-    #,m2
-    ,m3
+    ,m1a
+    ,m1b
+    ,m2
+    ,m2a
+    ,m2b
     ,se=list(
         sqrt(diag(m1$vcovHC))
-        #,sqrt(diag(m2$vcovHC))
-        ,sqrt(diag(m3$vcovHC))
+        ,sqrt(diag(m1a$vcovHC))
+        ,sqrt(diag(m1b$vcovHC))
+        ,sqrt(diag(m2$vcovHC))
+        ,sqrt(diag(m2a$vcovHC))
+        ,sqrt(diag(m2b$vcovHC))
         )
     ,header=F
     , type="text"  # type="latex"?
@@ -484,11 +800,23 @@ library(multiwayvcov)
 m1$cluster.vcov <- cluster.vcov(m1, ~ Street)
 coeftest(m1, m1$cluster.vcov)
 
-# m2$cluster.vcov <- cluster.vcov(m2, ~ Street)
-# coeftest(m2, m2$cluster.vcov)
+m1a$cluster.vcov <- cluster.vcov(m1a, ~ Street)
+coeftest(m1a, m1a$cluster.vcov)
 
-m3$cluster.vcov <- cluster.vcov(m3, ~ Street)
-coeftest(m3, m3$cluster.vcov)
+m1b$cluster.vcov <- cluster.vcov(m1b, ~ Street)
+coeftest(m1b, m1b$cluster.vcov)
+
+
+
+
+m2$cluster.vcov <- cluster.vcov(m2, ~ Street)
+coeftest(m2, m2$cluster.vcov)
+
+m2a$cluster.vcov <- cluster.vcov(m2a, ~ Street)
+coeftest(m2a, m2a$cluster.vcov)
+
+m2b$cluster.vcov <- cluster.vcov(m2b, ~ Street)
+coeftest(m2b, m2b$cluster.vcov)
 ```
 
 
@@ -499,12 +827,18 @@ coeftest(m3, m3$cluster.vcov)
 library(stargazer)
 stargazer(
     m1
-    #,m2
-    ,m3
+    ,m1a
+    ,m1b
+    ,m2
+    ,m2a
+    ,m2b
     ,se=list(
         sqrt(diag(m1$cluster.vcov))
-        #,sqrt(diag(m2$cluster.vcov))
-        ,sqrt(diag(m3$cluster.vcov))
+        ,sqrt(diag(m1a$cluster.vcov))
+        ,sqrt(diag(m1b$cluster.vcov))
+        ,sqrt(diag(m2$cluster.vcov))
+        ,sqrt(diag(m2a$cluster.vcov))
+        ,sqrt(diag(m2b$cluster.vcov))
         )
     ,header=F
     , type="text"  # type="latex"?
