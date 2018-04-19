@@ -467,39 +467,90 @@ ggplot(data=dtA[,.(neighbors.score),], mapping=aes(x=neighbors.score)) +
 
 ```
 
-```{r}
-# using regression to check for covariate balance
-# TBD  add regression analysis of D on rest of covariates
-
-colnames(dtA)
-str(dtA)
-
-# m.cbc <- lm(Treat ~ Street + PickupDOW + street.score, data=dtA[S==1])
-# m.cbc <- lm(D ~ Street + PickupDOW, data=dtA[S==1])
-# 
-# m.cbc <- lm(D ~ Street + PickupDOW + pre.bin + street.score, data=dtA[S==1])
-# m.cbc <- lm(D ~ PickupDOW + pre.bin + street.score, data=dtA[S==1])
-# 
-# 
-# m.cbc <- lm(post.bin ~ D + Street, data=dtA[S==1])
-# 
-# summary(m.cbc)
-
-# check for balance using regression
-#dtA[,lm(Treat ~ Street + street.score + PickupDOW),]
-
-
-```
-
 
 ```{r}
-# plots to show covariate balance between control and treatment groups
+# more plots to explore covariates
+
+# checks the different splits of our population
+# splits on our houses
+dtA[,.(.N),by=c("Pre")]
+dtA[Pre=="N",.(.N),by=c("Treat")]
+
+# splits on our streets
+dtA[,.(.N),by=c("Pre","Street")][,.(.N),by=Pre]
+dtA[Pre=="N",.(.N),by=c("Treat","Street")][,.(.N),by=Treat]
+
 
 library(ggplot2)
 
 #install.packages("GGally")
 library(GGally)
 
+#install.packages("ggplot2")
+library(ggplot2)
+
+#install.packages("reshape2")
+library(reshape2)
+
+# #install.packages("ggplot2")
+# library(ggplot2)
+# 
+# #install.packages("reshape2")
+# library(reshape2)
+# 
+# # displays distribution of assignment and post-treatment bin count, for the units in our experiment
+# dcast(data=dtA[S==1,.N,by=c("Treat","Post")], Post ~ Treat, value.var="N")
+
+# ggplot(data=dtA[S==1], mapping=aes(x=Treat,y=Post,fill=count))
+#     geom_tile() + 
+#     scale_x_continuous(breaks=c(0,1)) + 
+#     scale_y_continuous(breaks=c(0,1)) + 
+#     ggtitle("Number of Assignments, by post-treatment bin count")
+
+# # shows number of assignments, for the units in our experiment, to check if we have a roughly even split
+# dtA[S==1,.N,by="D"]
+# 
+# plt <- ggplot(data=dtA[S==1], mapping=aes(x=D))
+# viz <- plt + 
+#     geom_bar() + 
+#     scale_x_continuous(breaks=c(0,1)) + 
+#     ggtitle("Number of Assignments to Treatment and Control")
+# viz
+# 
+# 
+# 
+# # shows number of assignments by street, for the units in our experiment
+# dcast(data=dtA[S==1,.N,by=c("D","Street")], Street ~ D, value.var="N")
+# 
+# plt <- ggplot(data=dtA[S==1], mapping=aes(x=D,y=Street,fill=count))
+# viz <- plt + 
+#     geom_tile() + 
+#     scale_x_continuous(breaks=c(0,1)) + 
+#     ggtitle("Number of Assignments, by Street")
+# viz
+# 
+# 
+# 
+# # shows number of assignments by date, for units in our experiment
+# dcast(data=dtA[S==1,.N,by=c("D","Date")], Date ~ D, value.var="N")
+# 
+# plt <- ggplot(data=dtA[S==1], mapping=aes(x=D,y=Date,fill=count))
+# viz <- plt + 
+#     geom_tile() + 
+#     scale_x_continuous(breaks=c(0,1)) + 
+#     ggtitle("Number of Assignments, by Date")
+# viz
+# 
+# 
+# 
+# # shows number of assignments by street score, for units in our experiment
+# dcast(data=dtA[S==1,.N,by=c("D","street.score")], street.score ~ D, value.var="N")
+# 
+# plt <- ggplot(data=dtA[S==1,.N,by=c("D","street.score")], mapping=aes(x=street.score,y=N,color=factor(D)))
+# viz <- plt + 
+#     geom_point() + 
+#     ggtitle("Number of Assignments, by street score")
+# viz
 
 #plotmatrix(dtA[,.(Number,Street,PickupDOW),], colour="gray20")
 
@@ -561,9 +612,10 @@ ggplot(data=dtA[S==1], mapping=aes(x=Treat,y=neighbors.score)) +
 
 
 # street.score vs neighbors.score
-ggplot(data=dtA[S==1,.(street.score,neighbors.score)], mapping=aes(x=street.score,y=neighbors.score,size=2))
-    geom_point() +
-    ggtitle("Number of Assignments, by street score")
+ggplot(data=dtA[S==1,.(street.score,neighbors.score,Treat)], mapping=aes(x=street.score,y=neighbors.score,color=Treat)) +
+    geom_point(size=2) +
+    ggtitle("Street score vs Neighbor score")
+# no clear pattern between street score and neighbor score
 ```
 
 
@@ -571,88 +623,40 @@ ggplot(data=dtA[S==1,.(street.score,neighbors.score)], mapping=aes(x=street.scor
 
 
 ```{r}
-# Checks to see if our experiment's randomizer worked
-# TBD merge with previous section
-# maybe we need more covariates?
+# systematic checks on covariate balance, using Anova
 
-#install.packages("ggplot2")
-library(ggplot2)
+# from Alex.h in office hours...
 
-#install.packages("reshape2")
-library(reshape2)
+# short model, which models how well assignment to treatment, 1, predicts actual assignment to treatment, D=1
+cc1 <- lm(D ~ 1, data=dtA[S==1])
 
+# long model, which models how well assignment to treament & all our other covariates, predicts actual assignment to treatment, D=1
+cc2 <- lm(D ~ 1 + street.score + neighbors.score + wed, data=dtA[S==1])
 
-# # shows number of assignments, for the units in our experiment, to check if we have a roughly even split
-# dtA[S==1,.N,by="D"]
-# 
-# plt <- ggplot(data=dtA[S==1], mapping=aes(x=D))
-# viz <- plt + 
-#     geom_bar() + 
-#     scale_x_continuous(breaks=c(0,1)) + 
-#     ggtitle("Number of Assignments to Treatment and Control")
-# viz
-# 
-# 
-# 
-# # shows number of assignments by street, for the units in our experiment
-# dcast(data=dtA[S==1,.N,by=c("D","Street")], Street ~ D, value.var="N")
-# 
-# plt <- ggplot(data=dtA[S==1], mapping=aes(x=D,y=Street,fill=count))
-# viz <- plt + 
-#     geom_tile() + 
-#     scale_x_continuous(breaks=c(0,1)) + 
-#     ggtitle("Number of Assignments, by Street")
-# viz
-# 
-# 
-# 
-# # shows number of assignments by date, for units in our experiment
-# dcast(data=dtA[S==1,.N,by=c("D","Date")], Date ~ D, value.var="N")
-# 
-# plt <- ggplot(data=dtA[S==1], mapping=aes(x=D,y=Date,fill=count))
-# viz <- plt + 
-#     geom_tile() + 
-#     scale_x_continuous(breaks=c(0,1)) + 
-#     ggtitle("Number of Assignments, by Date")
-# viz
-# 
-# 
-# 
-# # shows number of assignments by street score, for units in our experiment
-# dcast(data=dtA[S==1,.N,by=c("D","street.score")], street.score ~ D, value.var="N")
-# 
-# plt <- ggplot(data=dtA[S==1,.N,by=c("D","street.score")], mapping=aes(x=street.score,y=N,color=factor(D)))
-# viz <- plt + 
-#     geom_point() + 
-#     ggtitle("Number of Assignments, by street score")
-# viz
+# other models, to see which covarites best predict treatment assignment
+cc3 <- lm(D ~ 1 + street.score, data=dtA[S==1])
+cc4 <- lm(D ~ 1 + neighbors.score, data=dtA[S==1])
+cc5 <- lm(D ~ 1 + wed, data=dtA[S==1])
+cc6 <- lm(D ~ 1 + street.score + neighbors.score, data=dtA[S==1])
+cc7 <- lm(D ~ 1 + neighbors.score + wed, data=dtA[S==1])
+cc8 <- lm(D ~ 1 + street.score + wed, data=dtA[S==1])
 
 
+# Anova test, F-test, to see if our covarites predict treatment assignment
+# if the long model as a p-value that shows that the covariates significantly predict the treatment assignment, then our randomization didn't work so well
+# note, we don't want to just rely on each covariate's individual significance, because we are more interested in whether, as a whole, our split against our covariates was fair
+anova(cc1, cc2, test="LRT")
+anova(cc1, cc3, test="LRT")
+anova(cc1, cc4, test="LRT")
+anova(cc1, cc5, test="LRT")
+anova(cc1, cc6, test="LRT")
+anova(cc1, cc7, test="LRT")
+anova(cc1, cc8, test="LRT")
 
-# shows number of assignments by neighbor score, for units in our experiment
-# TBD
-
+# in our check on cc1 vs cc2, we have a low p-value of 0.0001897
+# unfortunately, it looks like we didn't quite split our assignment to treatment and control fairly with regards to these covariates
 ```
 
-
-```{r}
-# checks on results
-
-#install.packages("ggplot2")
-library(ggplot2)
-
-#install.packages("reshape2")
-library(reshape2)
-
-# displays distribution of assignment and post-treatment bin count, for the units in our experiment
-dcast(data=dtA[S==1,.N,by=c("Treat","Post")], Post ~ Treat, value.var="N")
-
-# ggplot(data=dtA[S==1], mapping=aes(x=Treat,y=Post,fill=count))
-#     geom_tile() + 
-#     scale_x_continuous(breaks=c(0,1)) + 
-#     scale_y_continuous(breaks=c(0,1)) + 
-#     ggtitle("Number of Assignments, by post-treatment bin count")
-```
 
 
 ```{r}
@@ -683,7 +687,10 @@ print("point estimate for ITT effect is:")
 (ate)
 ```
 
-
+This is our project's model:
+$$
+post.bin = \beta_0 + \beta_1 D + \beta_2 street.score + \beta_3 neighbors.score + \beta_4 wed + \beta_5D \cdot street.score + \beta_6 D \cdot neighbors.score + \beta_7 D \cdot wed
+$$
 
 
 ```{r}
@@ -693,102 +700,102 @@ print("point estimate for ITT effect is:")
 
 
 # model 1, has no control variables
-m1 <- lm(post.bin ~ D, data=dtA[S==1 & !is.na(post.bin)])
+m1 <- lm(post.bin ~ D, data=dtA[S==1])
 (m1)
-plot(m1)
+# plot(m1)
 
 # model 1a, assumes the NA houses would have NOT put out a bin, had we been able to measure them
 m1a <- lm(post.bin.a ~ D, data=dtA[S==1])
 (m1a)
-plot(m1a)
+# plot(m1a)
 
 # model 1b, assumes the NA houses woudl have put out a bin, had we been able to measure them
 m1b <- lm(post.bin.b ~ D, data=dtA[S==1])
 (m1b)
-plot(m1b)
+# plot(m1b)
 
 
 
 # model 2 includes covariates like pickup DOW, street, and neighor scores, as control variables
-m2 <- lm(post.bin ~ D + street.score + neighbors.score + wed, data=dtA[S==1 & !is.na(post.bin)])
+m2 <- lm(post.bin ~ D + street.score + neighbors.score + wed + street.score * D + neighbors.score * D + wed * D, data=dtA[S==1])
 (m2)
-plot(m2)
+# plot(m2)
 
 # model 2a, assumes the NA houses would have NOT put out a bin, had we been able to measure them
-m2a <- lm(post.bin.a ~ D + street.score + neighbors.score + wed, data=dtA[S==1])
+m2a <- lm(post.bin.a ~ D + street.score + neighbors.score + wed + street.score * D + neighbors.score * D + wed * D, data=dtA[S==1])
 (m2a)
-plot(m2a)
+# plot(m2a)
 
 # model 2b, assumes the NA houses would have put out a bin, had we been able to measure them
-m2b <- lm(post.bin.b ~ D + street.score + neighbors.score + wed, data=dtA[S==1])
+m2b <- lm(post.bin.b ~ D + street.score + neighbors.score + wed + street.score * D + neighbors.score * D + wed * D, data=dtA[S==1])
 (m2b)
-plot(m2b)
+# plot(m2b)
 
 
 ```
 
 
-```{r}
-# calculates the robust standard error
-# see week05clusterAndRobust.Rmd for details
-
-# we calculate robust standard errors using the `sandwich` package, and via the `vcovHC` function call, which is the **H**eteroskedastic **C**onsistent **V**ariance **Co****V**ariance estimator.
-
-#install.packages("sandwich")
-library(sandwich)
-
-#install.packages("lmtest")
-library(lmtest)
-
-m1$vcovHC <- vcovHC(m1)
-coeftest(m1)
-
-m1a$vcovHC <- vcovHC(m1a)
-coeftest(m1a)
-
-m1b$vcovHC <- vcovHC(m1b)
-coeftest(m1b)
-
-
-
-m2a$vcovHC <- vcovHC(m2a)
-coeftest(m2a)
-
-m2b$vcovHC <- vcovHC(m2b)
-coeftest(m2b)
-
-m2b$vcovHC <- vcovHC(m2b)
-coeftest(m2b)
+```{r robust_se}
+# # calculates the robust standard error
+# # see week05clusterAndRobust.Rmd for details
+# 
+# # we calculate robust standard errors using the `sandwich` package, and via the `vcovHC` function call, which is the **H**eteroskedastic **C**onsistent **V**ariance **Co****V**ariance estimator.
+# 
+# #install.packages("sandwich")
+# library(sandwich)
+# 
+# #install.packages("lmtest")
+# library(lmtest)
+# 
+# m1$vcovHC <- vcovHC(m1)
+# coeftest(m1)
+# 
+# m1a$vcovHC <- vcovHC(m1a)
+# coeftest(m1a)
+# 
+# m1b$vcovHC <- vcovHC(m1b)
+# coeftest(m1b)
+# 
+# 
+# 
+# m2a$vcovHC <- vcovHC(m2a)
+# coeftest(m2a)
+# 
+# m2b$vcovHC <- vcovHC(m2b)
+# coeftest(m2b)
+# 
+# m2b$vcovHC <- vcovHC(m2b)
+# coeftest(m2b)
 
 ```
 
-```{r, results = "asis"}
-# displays the robust standard error we just calculated using a stargazer table
-
-#install.packages("stargazer")
-library(stargazer)
-stargazer(
-    m1
-    ,m1a
-    ,m1b
-    ,m2
-    ,m2a
-    ,m2b
-    ,se=list(
-        sqrt(diag(m1$vcovHC))
-        ,sqrt(diag(m1a$vcovHC))
-        ,sqrt(diag(m1b$vcovHC))
-        ,sqrt(diag(m2$vcovHC))
-        ,sqrt(diag(m2a$vcovHC))
-        ,sqrt(diag(m2b$vcovHC))
-        )
-    ,header=F
-    , type="text"  # type="latex"?
-) 
+```{r robust_se_stargazer}
+# # displays the robust standard error we just calculated using a stargazer table
+# 
+# #install.packages("stargazer")
+# library(stargazer)
+# stargazer(
+#     m1
+#     ,m1a
+#     ,m1b
+#     ,m2
+#     ,m2a
+#     ,m2b
+#     ,se=list(
+#         sqrt(diag(m1$vcovHC))
+#         ,sqrt(diag(m1a$vcovHC))
+#         ,sqrt(diag(m1b$vcovHC))
+#         ,sqrt(diag(m2$vcovHC))
+#         ,sqrt(diag(m2a$vcovHC))
+#         ,sqrt(diag(m2b$vcovHC))
+#         )
+#     ,header=F
+#     , type="text"  # type="latex"?
+# ) 
 ```
 
 
-```{r}
+```{r clustered_se}
 # calculates the clustered standard error
 # is better fit to reality in our case, since we have a clustered design
 # TBD think about randomization inference, see Ram's code and GG's
@@ -820,7 +827,7 @@ coeftest(m2b, m2b$cluster.vcov)
 ```
 
 
-```{r, results = "asis"}
+```{r clustered_se_stargazer}
 # displays the clustered standard error we just calculated using a stargazer table
 
 #install.packages("stargazer")
@@ -881,48 +888,117 @@ coefci(m2b)
 
 
 ```{r}
-# power test TBD
+# power test
+# a.k.a. did we have a chance of detecting a result?
 # see FE Appendix A3.1, p93, for the analytical approach
 # see week04_powerAnalysis.Rmd, for the simulation approach; we're going to use the simulation approach
 
-# ingredients:
-#       Treatment effect size
-#       Sample size (overall); and sample size in condition
-#       Underlying Variance of Outcomes
-#       ?? level of significance
+# from Alex.h in office hours
+# 1. calculate the sample mean from treatment, and the sample mean from control
+#       because our experiment doesn't have a distribution of treatment effects, we don't need to calculate the variance (our variance is essentially 1, uniform)
+# 2. use the number of units in control, uniform distribution, and sample mean of control to simluate a potential outcome to control (y0)
+#       could use rbinom distrubtions, (or other: counting, poisson)  instead of the rnorm distribution in Alex's previous code
+# 3. use the number of units in treatment, uniform distribution, and sample mean of treatment to simluate a potential outcome to treatment (y1)
+#       could use rbinom distrubtions, (or other: counting, poisson)  instead of the rnorm distribution in Alex's previous code
+# 4. do a t-test on potential outcome to control, and potential outcome to treatment
+#       assumes we are doing a two-tailed test, with a 95% confidence level
+#       return the p-value of our t-test
+# 5. repeat this simulation keeping everyting the same to get a distribution of p-values
+#       look at the resulting distribution of p-values
+#       calculate the power of the test as the mean of p-values < 0.05
+#       this tells us essentially what our chances are of detecting a resule based on our experiment's parameters
+# 6. repeat this simulation using differing number of subjects or different sample means in the treatment vs control groups
+
+power.function.single <- function(
+    sim.n.units.treat
+    ,sim.n.units.control
+    ,sim.mu.treat
+    ,sim.mu.control
+) {
+    y1 = rbinom(n=sim.n.units.treat, size=1, prob=sim.mu.treat)
+    y0 = rbinom(n=sim.n.units.control, size=1, prob=sim.mu.control)
+    return(t.test(y0, y1)$p.value)
+}
 
 
-# example ...
+# calculate the ingredients needed for Alex's new power function
+# note, when calculating ATE, we dropped the Post==NAs records, due to measurement errors
 
-# What is the outcome under control condition? 
-#       This is a statement that can be informed by the data that you have on the rack; prior data that you can observe, summarizations of data from other industries or research, or if none of this exists, from your own best guess. When making statement, you need also to consider what the dispersion under the control condition is, or will be.
+n.bins.treat.post <- dtA[S==1 & !is.na(Post) & Treat=="Y" & Post=="Y",.N] #33
+n.bins.treat.pre  <- dtA[S==1 & !is.na(Post) & Treat=="Y" & Pre=="Y",.N] #0
+n.units.treat     <- dtA[S==1 & !is.na(Post) & Treat=="Y", .N] #102
+mu.treat          <- (n.bins.treat.post - n.bins.treat.pre) / n.units.treat #0.3235
+sd.treat          <- 1 # not used for rbinom distribution
 
-# What is likely to be the treamtent effect? 
-#       When you supply people with treatment, what effect will it have? 
-#       Will it be a uniform effect that everybody increases by k points? 
-#       Or, will it be a distribution of an effect? 
-#       Will the treatment effects be meaningful different at different points in the control distribution (HTE?) 
-#       or will the average effect be the same in all places.
+n.bins.control.post <- dtA[S==1 & !is.na(Post) & Treat=="N" & Post=="Y",.N] #34
+n.bins.control.pre  <- dtA[S==1 & !is.na(Post) & Treat=="N" & Pre=="Y",.N] #0
+n.units.control     <- dtA[S==1 & !is.na(Post) & Treat=="N", .N] #80
+mu.control          <- (n.bins.control.post - n.bins.control.pre) / n.units.control #0.425
+sd.control          <- 1 # not used for rbinom distribution
 
-# How many units can you utilize? 
-#       How many individual units will you have access to for the control condition? 
-#       How many individual units will you have access to for the treatment condition or conditions?
-
-# What is the test that you're going to apply at the estimation stage? 
-#       How are you going to test your experiment? Using RI? Using a  ks.test? Using a regression? With a Bayesian statement? 
-#       How strong must the evidence be for you to conclude that your experiment was successful?
+tau <- mu.treat - mu.control
 
 
-# print("sample size overall")
-# dtA[S==1,.N,]
-# print("sample size in condition")
-# dtA[S==1 & D==0,.N,]
-# print("sample size in treatment")
-# dtA[S==1 & D==1,.N,]
+# run the power function many times to get a distribution of p-values
+set.seed(98675987)
+
+p.values <- replicate(1000,
+    power.function.single(
+        sim.n.units.treat    = n.units.treat
+        ,sim.n.units.control = n.units.control
+        ,sim.mu.treat            = mu.treat
+        ,sim.mu.control          = mu.control
+    )
+)
+#hist(p.values, main=paste("Power = ", mean(p.values < 0.05)))
+ggplot(data=data.table(p.values), mapping=aes(x=p.values)) +
+    geom_histogram(binwidth=0.1) +
+    scale_x_continuous(breaks = seq(0, 1, 0.1)) +
+    ggtitle("Distribution of p-values", subtitle=paste("Power = ", mean(p.values < 0.05))) +
+    xlab("p-values") +
+    ylab("Frequency") + 
+    geom_vline(aes(xintercept = mean(p.values < 0.05)),col='black',size=2)
+# looks like we would only correctly reject H0 when H1 is true (i.e. there is likely not no effect) about 27% of the time
+
+
+p.values <- replicate(1000,
+      power.function.single(
+          sim.n.units.treat    = n.units.treat * 2
+          ,sim.n.units.control = n.units.control * 2
+          ,sim.mu.treat            = mu.treat
+          ,sim.mu.control          = mu.control
+      )
+)
+hist(p.values, main=paste("Power = ", mean(p.values < 0.05)))
+# if we had twice as many subjects in both our treatment and control groups, then our experiment would have a power of about .36
+
+
+
+p.values <- replicate(1000,
+      power.function.single(
+          sim.n.units.treat    = n.units.treat * 4
+          ,sim.n.units.control = n.units.control * 4
+          ,sim.mu.treat            = mu.treat
+          ,sim.mu.control          = mu.control
+      )
+)
+hist(p.values, main=paste("Power = ", mean(p.values < 0.05)))
+# if we had four times as many subjects in both our treatment and control groups, then our experiment would have a power of about .64
 
 
 
 
-
+p.values <- replicate(1000,
+      power.function.single(
+          sim.n.units.treat    = n.units.treat
+          ,sim.n.units.control = n.units.control
+          ,sim.mu.treat            = mu.control + .2
+          ,sim.mu.control          = mu.control
+      )
+)
+hist(p.values, main=paste("Power = ", mean(p.values < 0.05)))
+# if we had a treatment mean that is .2 larger than the control, then we can reject H0 correctly 77% of the time
 
 ```
+
+
