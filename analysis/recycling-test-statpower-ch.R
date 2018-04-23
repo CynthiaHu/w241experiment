@@ -176,7 +176,11 @@ plot(res, type = 'l', lty=3, col = "red")
 df <- data.frame(power=res, size=iterator)
 
 p1 <- ggplot(df, aes(x = size, y = power)) + geom_line()
-p1 + geom_line(aes(y=ourpower, colour = "red"), size = 1) + ylab("Power") + xlab("Sample Size") + ggtitle("Figure 5: Power by Sample Size")
+p2 <- p1 + geom_line(aes(y=ourpower, colour = "red"), size = 1) + ylab("Power") + xlab("Sample Size") 
+p2 + ggtitle("Figure 5: Power by Sample Size") + scale_colour_discrete(name="", labels="Power of This Experiment (.274)")
+
+# theme(legend.position="none")
+
 
 
 
