@@ -1,0 +1,765 @@
+---
+title: "w241 recycling test"
+output: pdf_document
+---
+
+For exploring with the experiment's data
+
+The following columns are in the raw data
+Route:      route id
+Number:     house number
+Street:     streetname
+city:       city
+state:      state
+zip:        zipcode
+pickup dow: either THU or WED to indicate which day of week
+Pre:        Y/N indicator for whether we saw these folks put out a bin during the "before treatment" observation
+Post:       Y/N indicator for whether we saw these folks put out a bin during the "after treatment" observation
+Treat:      Y/N indicator for whether the house was "treated" or not.
+
+
+Each row represents a house, and each house has a before-treatment and after-treatment observation. Note that while we observed Post for nearly all units, we are not using records where Pre=Y in our ITT effect, so that we can see if we have an effect at all.
+
+
+We also calculate the following additional variables from the data
+S:                  1 if Pre==Y, 0 otherwise, for easy filtering of houses that were in our experiment
+D:                  1 if house was assigned to treatment , 0 otherwise
+pre.bin:            1 if Pre==Y, 0 otherwise
+post.bin:           1 if Post==Y, 0 if Post==N, NA otherwise, i.e. drops the NA records
+post.bin.a:         1 if Post==Y, 0 if Post==N, 0 otherwise, i.e. assumes NA records would have measured 0
+post.bin.b:         1 if Post==Y, 0 if Post==N, 1 otherwise, i.e. assumes NA records would have measured 1
+wed                 1 if PickupDOW==WED, 0 otherwise
+street.score:       Street score, calculated as the ratio of number of Pre==Y, to number of houses on the street, for each street
+neighbors.score:    Neighbors' score, calcuated as the ratio of number of Pre==Y, to the number of neighbors, for each house (neighbor defined as 0 > distance < 60 meters)
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+getwd()
+setwd("C:/Users/yangyq/workspaces/ucbiyyq/w241experiment/analysis")
+getwd()
+```
+
+
+```{r load_raw}
+#install.packages("data.table")
+library(data.table)
+
+# loads raw data
+dt <- data.table(read.csv("../data/Data - BOTH.csv", na.strings=c("")))
+
+# creates some dummy variables for ease of query and analysis later
+dtA <- dt[
+    ,.(
+        Number=factor(Number)
+        ,Street=factor(Street)
+        ,City
+        ,State
+        ,Zip=factor(Zip)
+        ,Route
+        ,PickupDOW
+        ,Pre
+        ,Treat
+        ,Post
+        ,S=factor(ifelse(Pre=="N",1,0))
+        ,D=ifelse(Treat=="Y",1,0)
+        ,pre.bin=ifelse(Pre=="Y",1,0)
+        ,post.bin=ifelse(Post=="Y",1,ifelse(Post=="N",0,NA))
+        ,post.bin.a=ifelse(is.na(Post),0,ifelse(Post=="Y",1,0))
+        ,post.bin.b=ifelse(is.na(Post),1,ifelse(Post=="Y",1,0))
+        ,wed=ifelse(PickupDOW=="WED",1,0)
+    )
+    ,
+]
+```
+
+
+
+```{r calc_street_score}
+# calculates the street-score covariate
+# we might expect that a person on a street where lots of households recycle, might be more inclined to recycle
+# street score is calculated as the ratio of: number of Pre==Y, to number of houses on the street, for each street
+
+# calculates the street score data table
+s.scr <- merge( 
+    x=dtA[Pre=="Y",.(n.pre.Y=.N),by="Street"]
+    ,y=dtA[,.(n.houses=.N),by="Street"]
+    ,by.x="Street"
+    ,by.y="Street"
+    ,all.y=TRUE
+)[
+    ,.(
+        Street
+        ,n.pre.Y=ifelse(is.na(n.pre.Y),0,n.pre.Y)
+        ,n.houses
+    )
+    ,
+][
+    ,.(
+        Street
+        #,n.pre.Y
+        #,n.houses
+        ,street.score=n.pre.Y/n.houses
+    )
+    ,
+]
+
+
+# joins the street score data table back into the main data table
+dtA <- merge( x=dtA, y=s.scr, by.x="Street", by.y="Street", all.x=TRUE )
+
+```
+
+
+```{r calc_neighbors_score}
+# calculates the neighbor-score covariate
+# we might expect that a person whose nearby neighbors recycle, might be more inclined to recycle
+
+# reads gps from disk, prefetched by the test-gps script
+gpsr <- data.table(read.csv("../data/Data-gps.csv", na.strings=c("")))[
+    ,.(
+        Number=factor(Number)
+        ,Street
+        ,City
+        ,State
+        ,Zip=factor(Zip)
+        ,lat
+        ,lng)
+    ,
+]
+
+
+# calculates the cross-join of each house to others
+gpsj <- gpsr[,.(Number, Street, Zip, lat, lng, j=1),] #adds a dummy column "j" to manipulate the cross join
+gpsx <- merge(gpsj, gpsj, by='j', all.x=TRUE, all.y=TRUE, allow.cartesian=TRUE)
+
+
+#calculates the distance between gps points
+# R function that computes the "great circle" distance between two gps points. Intended for use with data.table
+# https://stackoverflow.com/questions/36817423/how-to-efficiently-calculate-distance-between-pair-of-coordinates-using-data-tab
+# r = radius of earth in meters
+# returns distance between the two gps locations, in meters
+dt.haversine <- function(lat_from, lon_from, lat_to, lon_to, r = 6378137){
+    radians <- pi/180
+    lat_to <- lat_to * radians
+    lat_from <- lat_from * radians
+    lon_to <- lon_to * radians
+    lon_from <- lon_from * radians
+    dLat <- (lat_to - lat_from)
+    dLon <- (lon_to - lon_from)
+    a <- (sin(dLat/2)^2) + (cos(lat_from) * cos(lat_to)) * (sin(dLon/2)^2)
+    return(2 * atan2(sqrt(a), sqrt(1 - a)) * r)
+}
+
+
+# calculates all the distances between all houses
+gpsx <- gpsx[ 
+    , .(
+            Number.x=factor(Number.x)
+            ,Street.x=factor(Street.x)
+            ,Zip.x=factor(Zip.x)
+            ,lat.x
+            ,lng.x
+            ,Number.y=factor(Number.y)
+            ,Street.y=factor(Street.y)
+            ,Zip.y=factor(Zip.y)
+            ,lat.y
+            ,lng.y
+            ,dist=dt.haversine(lat.x, lng.x, lat.y, lng.y)
+            ,num.diff = as.numeric(levels(Number.x))[Number.x] - as.numeric(levels(Number.y))[Number.y]
+        )
+    , 
+]
+
+
+# left joins the dtA data to the gpsx data, specifically on y-columns, so that we can calculate the neighbor score of the x-columns
+setkey(gpsx,Number.y,Street.y)
+setkey(dtA,Number,Street)
+gpsx <- merge(
+    x=gpsx
+    ,y=dtA
+    ,by.x=c("Number.y","Street.y")
+    ,by.y=c("Number","Street")
+    ,all.x=TRUE
+    ,allow.cartesian=TRUE 
+)[
+    ,.(
+        Number.x
+        ,Street.x
+        ,Zip.x
+        ,lat.x
+        ,lng.x
+        ,Number.y
+        ,Street.y
+        ,Zip.y
+        ,lat.y
+        ,lng.y
+        ,Pre.y=Pre
+        ,pre.bin.y=pre.bin
+        ,PickupDOW.y=PickupDOW
+        ,wed.y=wed
+        ,dist
+        ,num.diff
+    )
+]
+
+
+# calcuates the neighbor score, as ratio of Pre==Y / Number of neighbors, per house
+# neighbors defined as houses within 60 meters, but the house itself
+# see the test-gps script for test examples to determine radius
+# note, due to some addresses that can't be found, there will be some missing houses
+n.scr <- merge(
+    x=gpsx[dist>0 & dist<60 & Pre.y=="Y", .(n.pre.y=.N), by=c("Number.x","Street.x")]
+    ,y=gpsx[dist>0 & dist<60, .(n.neighbors=.N), by=c("Number.x","Street.x")]
+    ,by.x=c("Number.x","Street.x")
+    ,by.y=c("Number.x","Street.x")
+    ,all.y=TRUE
+)[
+    ,.(
+        Number=Number.x
+        ,Street=Street.x
+        ,n.pre.y=ifelse(is.na(n.pre.y),0,n.pre.y)
+        ,n.neighbors
+    )
+    ,
+][
+    ,.(
+        Number
+        ,Street
+        #,n.pre.y
+        #,n.neighbors
+        ,neighbors.score=n.pre.y/n.neighbors
+    )
+    ,
+]
+
+
+
+# joins the street score data table back into the main data table
+dtA <- merge(
+    x=dtA
+    ,y=n.scr
+    ,by.x=c("Number","Street")
+    ,by.y=c("Number","Street")
+    ,all.x=TRUE 
+)
+
+
+
+# joins the gps data back into main data table for future visualizations
+dtA <- merge(
+    x=dtA
+    ,y=gpsr[,.(Number,Street,lat,lng)]
+    ,by.x=c("Number","Street")
+    ,by.y=c("Number","Street")
+    ,all.x=TRUE 
+)
+
+
+# selects just the columns we care about
+# replaces any neighbor score NA with 0
+dtA <- dtA[
+    ,.(
+        Number
+        ,Street
+        ,City
+        ,State
+        ,Zip
+        ,Route
+        ,PickupDOW
+        ,Pre
+        ,Treat
+        ,Post
+        ,S
+        ,D
+        ,pre.bin
+        ,post.bin
+        ,post.bin.a
+        ,post.bin.b
+        ,wed
+        ,street.score
+        ,neighbors.score=ifelse(is.na(neighbors.score),0,neighbors.score)
+        ,lat
+        ,lng
+    )
+    ,
+]
+
+```
+
+
+```{r}
+# summary of variables
+summary(dtA[,.(Number,Street,City,State,Zip,Route,PickupDOW,Pre,Treat,Post),])
+str(dtA[,.(Number,Street,City,State,Zip,Route,PickupDOW,Pre,Treat,Post),])
+
+# summary of variables, the calculated values
+summary(dtA[,.(S,D,wed,street.score,neighbors.score,pre.bin,post.bin,post.bin.a,post.bin.b),])
+str(dtA[,.(S,D,wed,street.score,neighbors.score,pre.bin,post.bin,post.bin.a,post.bin.b),])
+
+#summary(dtA)
+#str(dtA)
+
+
+print("number of total observations in raw data:")
+(nrow(dt))
+print("number of units used in experiment:" )
+(nrow(dtA[S==1]))
+```
+
+
+
+```{r}
+# some simple univariate analysis
+library(ggplot2)
+library(gridExtra)
+library(GGally)
+library(reshape2)
+
+
+# , for houses in experiment
+
+p1 <- ggplot(data=dtA[S==1,.N,by=.(Street)], mapping=aes(x=N)) +
+    geom_histogram(binwidth=10) + 
+    scale_x_continuous(breaks = seq(0, 100, 10)) +
+    ggtitle("Frequency of \nhouses-per-Street") +
+    xlab("houses per Street") +
+    ylab("Frequency")
+
+
+# Route
+p2 <- ggplot(data=dtA[S==1], mapping=aes(x=Route)) +
+    geom_bar() + 
+    ggtitle(label="Count of Houses \nper Route") +
+    # xlab("Route") +
+    ylab("Count of houses")
+# we have roughly twice as many houses on route RE13W02, vs on RE13H02
+
+
+# Post
+p3 <- ggplot(data=dtA[S==1], mapping=aes(x="",fill=Post)) +
+    geom_bar() + 
+    scale_fill_manual(values=c("grey", "green4")) +
+    ggtitle(label="Count of Houses \nper Post-treatment-bin-status") +
+    # xlab("Post-treatment-bin-status") +
+    ylab("Count of houses")
+# of those in the experiment, only about 1/3 of houses put out a bin in post-treatment
+# We're missing 5 observations due to measurement error
+# note, only those in the experiment (Pre=N) have a valid post-treatment
+
+# neighbors.score
+p4 <- ggplot(data=dtA[S==1,.(neighbors.score),], mapping=aes(x=neighbors.score)) +
+    geom_histogram(binwidth=.1) +
+    scale_x_continuous(breaks = seq(0, 1, .1)) +
+    ggtitle("Distribution of Neighbors Score", subtitle=paste("median of neighbors.score = ", dtA[,round(median(neighbors.score),2),])) +
+    xlab("Neighbors score") +
+    ylab("Number") + 
+    geom_vline(aes(xintercept = median(neighbors.score)),col='black',size=2)
+
+# neighbors.score vs Treat
+p5 <- ggplot(data=dtA[S==1], mapping=aes(x=Treat,y=neighbors.score)) +
+    geom_boxplot() +
+    ggtitle(label="Neighbors Score \nby Treatment") +
+    xlab("Treatment") +
+    ylab("Neighbors Score")
+
+grid.arrange(p1, p2, p3, ncol = 3)
+grid.arrange(p4, p5, ncol = 2)
+
+
+# street.score
+# p4 <- ggplot(data=dtA[S==1,.(street.score),], mapping=aes(x=street.score)) +
+#     geom_histogram(binwidth=.1) +
+#     scale_x_continuous(breaks = seq(0, 1, .1)) +
+#     ggtitle("Distribution of street.scores", subtitle=paste("median of street.scores = ", dtA[,round(median(street.score),2),])) +
+#     xlab("street score") +
+#     ylab("Number") + 
+#     geom_vline(aes(xintercept = median(street.score)),col='black',size=2)
+# street score is a ratio houses with bins to all houses, per street. Ranges from 0 to 1
+# we see that our houses on average tend to be on streets that are rather favorable to recycling (median ratio is 0.7)
+```
+
+
+
+```{r}
+# systematic checks on covariate balance, using Anova
+
+# from Alex.h in office hours...
+
+# short model, which models how well assignment to treatment, 1, predicts actual assignment to treatment, D=1
+cc1 <- lm(D ~ 1, data=dtA[S==1])
+
+# long model, which models how well assignment to treament & all our other covariates, predicts actual assignment to treatment, D=1
+cc2 <- lm(D ~ 1 + street.score + neighbors.score + wed, data=dtA[S==1])
+
+# other models, to see which covarites best predict treatment assignment
+cc3 <- lm(D ~ 1 + street.score, data=dtA[S==1])
+cc4 <- lm(D ~ 1 + neighbors.score, data=dtA[S==1])
+cc5 <- lm(D ~ 1 + wed, data=dtA[S==1])
+cc6 <- lm(D ~ 1 + street.score + neighbors.score, data=dtA[S==1])
+cc7 <- lm(D ~ 1 + neighbors.score + wed, data=dtA[S==1])
+cc8 <- lm(D ~ 1 + street.score + wed, data=dtA[S==1])
+
+
+# Anova test, F-test, to see if our covarites predict treatment assignment
+# if the long model as a p-value that shows that the covariates significantly predict the treatment assignment, then our randomization didn't work so well
+# note, we don't want to just rely on each covariate's individual significance, because we are more interested in whether, as a whole, our split against our covariates was fair
+anova(cc1, cc2, test="LRT")
+anova(cc1, cc3, test="LRT")
+anova(cc1, cc4, test="LRT")
+anova(cc1, cc5, test="LRT")
+anova(cc1, cc6, test="LRT")
+anova(cc1, cc7, test="LRT")
+anova(cc1, cc8, test="LRT")
+
+# in our check on cc1 vs cc2, we have a low p-value of 0.0001897
+# unfortunately, it looks like we didn't quite split our assignment to treatment and control fairly with regards to these covariates
+```
+
+
+
+```{r}
+# calculates a point estimate for ATE (ITT effect), manually for sanity check
+# note, when calculating ATE, we dropped the Post==NAs records, which we can attribute to measurement errors
+
+# potential outcome to control is calculated as proportion of homes that have bins when assigned to control
+po.control <- ( 
+        dtA[S==1 & !is.na(Post) & Treat=="N" & Post=="Y", .N, ] - 
+        dtA[S==1 & !is.na(Post) & Treat=="N" & Pre=="Y", .N, ] 
+        ) / dtA[S==1 & !is.na(Post) & Treat=="N", .N, ]
+print("potential outcome to control is:")
+(po.control)
+
+# potential outcome to treament is calculated as the proportion of homes that have bins when assigned to treatment
+po.treatment <- (
+        dtA[S==1 & !is.na(Post) & Treat=="Y" & Post=="Y", .N, ] - 
+        dtA[S==1 & !is.na(Post) & Treat=="Y" & Pre=="Y", .N, ]
+        ) / dtA[S==1 & !is.na(Post) & Treat=="Y", .N, ]
+print("potential outcome to treatment is:")
+(po.treatment)
+
+# point estimate for ate is calculate as potential outcome to treatment - potential outcome to control
+# note, we can only calcuate the intent to treamt effect, because we have no data on application rate
+ate <- po.treatment - po.control
+
+print("point estimate for ITT effect is:")
+(ate)
+```
+
+This is our project's model:
+$$
+post.bin = \beta_0 + \beta_1 D + \beta_2 street.score + \beta_3 neighbors.score + \beta_4 wed + \beta_5D \cdot street.score + \beta_6 D \cdot neighbors.score + \beta_7 D \cdot wed
+$$
+
+
+```{r}
+# calculates the ITT effect, using regression
+#m1 <- dtA[ , lm(hasBin ~ D) , ]  #this format that Alex likes doesn't quite work with the clustered se code later, so using a simpler one
+
+
+
+# model 1, has no control variables
+m1 <- lm(post.bin ~ D, data=dtA[S==1])
+(m1)
+# plot(m1)
+
+# model 1a, assumes the NA houses would have NOT put out a bin, had we been able to measure them
+m1a <- lm(post.bin.a ~ D, data=dtA[S==1])
+(m1a)
+# plot(m1a)
+
+# model 1b, assumes the NA houses woudl have put out a bin, had we been able to measure them
+m1b <- lm(post.bin.b ~ D, data=dtA[S==1])
+(m1b)
+# plot(m1b)
+
+
+
+# model 2 includes covariates like pickup DOW, street, and neighor scores, as control variables
+m2 <- lm(post.bin ~ D + street.score + neighbors.score + wed + street.score * D + neighbors.score * D + wed * D, data=dtA[S==1])
+(m2)
+# plot(m2)
+
+# model 2a, assumes the NA houses would have NOT put out a bin, had we been able to measure them
+m2a <- lm(post.bin.a ~ D + street.score + neighbors.score + wed + street.score * D + neighbors.score * D + wed * D, data=dtA[S==1])
+(m2a)
+# plot(m2a)
+
+# model 2b, assumes the NA houses would have put out a bin, had we been able to measure them
+m2b <- lm(post.bin.b ~ D + street.score + neighbors.score + wed + street.score * D + neighbors.score * D + wed * D, data=dtA[S==1])
+(m2b)
+# plot(m2b)
+
+
+```
+
+
+```{r robust_se}
+# # calculates the robust standard error
+# # see week05clusterAndRobust.Rmd for details
+# 
+# # we calculate robust standard errors using the `sandwich` package, and via the `vcovHC` function call, which is the **H**eteroskedastic **C**onsistent **V**ariance **Co****V**ariance estimator.
+# 
+# #install.packages("sandwich")
+# library(sandwich)
+# 
+# #install.packages("lmtest")
+# library(lmtest)
+# 
+# m1$vcovHC <- vcovHC(m1)
+# coeftest(m1)
+# 
+# m1a$vcovHC <- vcovHC(m1a)
+# coeftest(m1a)
+# 
+# m1b$vcovHC <- vcovHC(m1b)
+# coeftest(m1b)
+# 
+# 
+# 
+# m2a$vcovHC <- vcovHC(m2a)
+# coeftest(m2a)
+# 
+# m2b$vcovHC <- vcovHC(m2b)
+# coeftest(m2b)
+# 
+# m2b$vcovHC <- vcovHC(m2b)
+# coeftest(m2b)
+
+```
+
+```{r robust_se_stargazer}
+# # displays the robust standard error we just calculated using a stargazer table
+# 
+# #install.packages("stargazer")
+# library(stargazer)
+# stargazer(
+#     m1
+#     ,m1a
+#     ,m1b
+#     ,m2
+#     ,m2a
+#     ,m2b
+#     ,se=list(
+#         sqrt(diag(m1$vcovHC))
+#         ,sqrt(diag(m1a$vcovHC))
+#         ,sqrt(diag(m1b$vcovHC))
+#         ,sqrt(diag(m2$vcovHC))
+#         ,sqrt(diag(m2a$vcovHC))
+#         ,sqrt(diag(m2b$vcovHC))
+#         )
+#     ,header=F
+#     , type="text"  # type="latex"?
+# ) 
+```
+
+
+```{r clustered_se}
+# calculates the clustered standard error
+# is better fit to reality in our case, since we have a clustered design
+# TBD think about randomization inference, see Ram's code and GG's
+
+#install.packages("multiwayvcov")
+library(multiwayvcov)
+
+# note, we assume streets is our cluster, so we calculate the clustered var-cov matrix using Street variable
+m1$cluster.vcov <- cluster.vcov(m1, ~ Street)
+coeftest(m1, m1$cluster.vcov)
+
+m1a$cluster.vcov <- cluster.vcov(m1a, ~ Street)
+coeftest(m1a, m1a$cluster.vcov)
+
+m1b$cluster.vcov <- cluster.vcov(m1b, ~ Street)
+coeftest(m1b, m1b$cluster.vcov)
+
+
+
+
+m2$cluster.vcov <- cluster.vcov(m2, ~ Street)
+coeftest(m2, m2$cluster.vcov)
+
+m2a$cluster.vcov <- cluster.vcov(m2a, ~ Street)
+coeftest(m2a, m2a$cluster.vcov)
+
+m2b$cluster.vcov <- cluster.vcov(m2b, ~ Street)
+coeftest(m2b, m2b$cluster.vcov)
+```
+
+
+```{r clustered_se_stargazer}
+# displays the clustered standard error we just calculated using a stargazer table
+
+#install.packages("stargazer")
+library(stargazer)
+stargazer(
+    m1
+    ,m1a
+    ,m1b
+    ,m2
+    ,m2a
+    ,m2b
+    ,se=list(
+        sqrt(diag(m1$cluster.vcov))
+        ,sqrt(diag(m1a$cluster.vcov))
+        ,sqrt(diag(m1b$cluster.vcov))
+        ,sqrt(diag(m2$cluster.vcov))
+        ,sqrt(diag(m2a$cluster.vcov))
+        ,sqrt(diag(m2b$cluster.vcov))
+        )
+    ,header=F
+    , type="text"
+    # ,type="latex"
+) 
+```
+
+
+```{r}
+# stores the standard errors in some easy to access variables
+# maybe not necessary, since we have the regression tables
+# m1$robust.se <-  sqrt(diag(m1$vcovHC))
+# m1$cluster.se <- sqrt(diag(m1$cluster.vcov))
+# 
+# m2$robust.se <-  sqrt(diag(m2$vcovHC))
+# m2$cluster.se <- sqrt(diag(m2$cluster.vcov))
+# 
+# print("model 1 robust standard errors, but without clustering:")
+# (m1$robust.se)
+# print("model 1 clustered standard errors:")
+# (m1$cluster.se)
+# 
+# print("model 2 robust standard errors, but without clustering:")
+# (m2$robust.se)
+# print("model 2 clustered standard errors:")
+# (m2$cluster.se)
+```
+
+```{r}
+# calculates the ci for the ITT effect
+coefci(m1)
+coefci(m1a)
+coefci(m1b)
+coefci(m2)
+coefci(m2a)
+coefci(m2b)
+
+```
+
+
+
+```{r}
+# power test
+# a.k.a. did we have a chance of detecting a result?
+# see FE Appendix A3.1, p93, for the analytical approach
+# see week04_powerAnalysis.Rmd, for the simulation approach; we're going to use the simulation approach
+
+# from Alex.h in office hours
+# 1. calculate the sample mean from treatment, and the sample mean from control
+#       because our experiment doesn't have a distribution of treatment effects, we don't need to calculate the variance (our variance is essentially 1, uniform)
+# 2. use the number of units in control, uniform distribution, and sample mean of control to simluate a potential outcome to control (y0)
+#       could use rbinom distrubtions, (or other: counting, poisson)  instead of the rnorm distribution in Alex's previous code
+# 3. use the number of units in treatment, uniform distribution, and sample mean of treatment to simluate a potential outcome to treatment (y1)
+#       could use rbinom distrubtions, (or other: counting, poisson)  instead of the rnorm distribution in Alex's previous code
+# 4. do a t-test on potential outcome to control, and potential outcome to treatment
+#       assumes we are doing a two-tailed test, with a 95% confidence level
+#       return the p-value of our t-test
+# 5. repeat this simulation keeping everyting the same to get a distribution of p-values
+#       look at the resulting distribution of p-values
+#       calculate the power of the test as the mean of p-values < 0.05
+#       this tells us essentially what our chances are of detecting a resule based on our experiment's parameters
+# 6. repeat this simulation using differing number of subjects or different sample means in the treatment vs control groups
+
+power.function.single <- function(
+    sim.n.units.treat
+    ,sim.n.units.control
+    ,sim.mu.treat
+    ,sim.mu.control
+) {
+    y1 = rbinom(n=sim.n.units.treat, size=1, prob=sim.mu.treat)
+    y0 = rbinom(n=sim.n.units.control, size=1, prob=sim.mu.control)
+    return(t.test(y0, y1)$p.value)
+}
+
+
+# calculate the ingredients needed for Alex's new power function
+# note, when calculating ATE, we dropped the Post==NAs records, due to measurement errors
+
+n.bins.treat.post <- dtA[S==1 & !is.na(Post) & Treat=="Y" & Post=="Y",.N] #33
+n.bins.treat.pre  <- dtA[S==1 & !is.na(Post) & Treat=="Y" & Pre=="Y",.N] #0
+n.units.treat     <- dtA[S==1 & !is.na(Post) & Treat=="Y", .N] #102
+mu.treat          <- (n.bins.treat.post - n.bins.treat.pre) / n.units.treat #0.3235
+sd.treat          <- 1 # not used for rbinom distribution
+
+n.bins.control.post <- dtA[S==1 & !is.na(Post) & Treat=="N" & Post=="Y",.N] #34
+n.bins.control.pre  <- dtA[S==1 & !is.na(Post) & Treat=="N" & Pre=="Y",.N] #0
+n.units.control     <- dtA[S==1 & !is.na(Post) & Treat=="N", .N] #80
+mu.control          <- (n.bins.control.post - n.bins.control.pre) / n.units.control #0.425
+sd.control          <- 1 # not used for rbinom distribution
+
+tau <- mu.treat - mu.control
+
+
+# run the power function many times to get a distribution of p-values
+set.seed(98675987)
+
+p.values <- replicate(1000,
+    power.function.single(
+        sim.n.units.treat    = n.units.treat
+        ,sim.n.units.control = n.units.control
+        ,sim.mu.treat            = mu.treat
+        ,sim.mu.control          = mu.control
+    )
+)
+#hist(p.values, main=paste("Power = ", mean(p.values < 0.05)))
+ggplot(data=data.table(p.values), mapping=aes(x=p.values)) +
+    geom_histogram(binwidth=0.1) +
+    scale_x_continuous(breaks = seq(0, 1, 0.1)) +
+    ggtitle("Distribution of p-values", subtitle=paste("Power = ", mean(p.values < 0.05))) +
+    xlab("p-values") +
+    ylab("Frequency") + 
+    geom_vline(aes(xintercept = mean(p.values < 0.05)),col='black',size=2)
+# looks like we would only correctly reject H0 when H1 is true (i.e. there is likely not no effect) about 27% of the time
+
+
+p.values <- replicate(1000,
+      power.function.single(
+          sim.n.units.treat    = n.units.treat * 2
+          ,sim.n.units.control = n.units.control * 2
+          ,sim.mu.treat            = mu.treat
+          ,sim.mu.control          = mu.control
+      )
+)
+hist(p.values, main=paste("Power = ", mean(p.values < 0.05)))
+# if we had twice as many subjects in both our treatment and control groups, then our experiment would have a power of about .36
+
+
+
+p.values <- replicate(1000,
+      power.function.single(
+          sim.n.units.treat    = n.units.treat * 4
+          ,sim.n.units.control = n.units.control * 4
+          ,sim.mu.treat            = mu.treat
+          ,sim.mu.control          = mu.control
+      )
+)
+hist(p.values, main=paste("Power = ", mean(p.values < 0.05)))
+# if we had four times as many subjects in both our treatment and control groups, then our experiment would have a power of about .64
+
+
+
+
+p.values <- replicate(1000,
+      power.function.single(
+          sim.n.units.treat    = n.units.treat
+          ,sim.n.units.control = n.units.control
+          ,sim.mu.treat            = mu.control + .2
+          ,sim.mu.control          = mu.control
+      )
+)
+hist(p.values, main=paste("Power = ", mean(p.values < 0.05)))
+# if we had a treatment mean that is .2 larger than the control, then we can reject H0 correctly 77% of the time
+
+```
+
+
