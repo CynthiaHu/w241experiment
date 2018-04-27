@@ -37,9 +37,9 @@ neighbors.score:    Neighbors' score, calcuated as the ratio of number of Pre==Y
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
 
-getwd()
-setwd("C:/Users/yangyq/workspaces/ucbiyyq/w241experiment/analysis")
-getwd()
+# getwd()
+# setwd("C:/Users/yangyq/workspaces/ucbiyyq/w241experiment/analysis")
+# getwd()
 ```
 
 
